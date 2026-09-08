@@ -1,0 +1,31 @@
+[project]
+name = "arxiv-python"
+version = "0.1.0"
+description = "Python side of the arXiv ingestion engine: worker, query API, shared library."
+requires-python = ">=3.13"
+dependencies = []
+
+[tool.uv.workspace]
+members = ["arxiv_common", "worker", "query_api"]
+
+[tool.uv.sources]
+arxiv-common = { workspace = true }
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["arxiv_common/tests", "worker/tests", "query_api/tests"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["arxiv_common", "arxiv_worker", "arxiv_query_api"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Query"]

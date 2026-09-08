@@ -1,0 +1,23 @@
+[project]
+name = "arxiv-worker"
+version = "0.1.0"
+description = "Kafka consumer that embeds, summarizes, and stores papers in Postgres + pgvector."
+readme = "README.md"
+authors = [
+    { name = "Vedanth Chamala", email = "vedhuchamala@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "arxiv-common",
+    "confluent-kafka>=2.15.0",
+]
+
+[project.scripts]
+arxiv-worker = "arxiv_worker.main:main"
+
+[build-system]
+requires = ["uv_build>=0.11.2,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+arxiv-common = { workspace = true }

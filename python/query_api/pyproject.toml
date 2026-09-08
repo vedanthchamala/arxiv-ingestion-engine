@@ -1,0 +1,25 @@
+[project]
+name = "arxiv-query-api"
+version = "0.1.0"
+description = "FastAPI semantic search over ingested arXiv papers, with a Redis semantic cache."
+readme = "README.md"
+authors = [
+    { name = "Vedanth Chamala", email = "vedhuchamala@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "arxiv-common",
+    "fastapi>=0.141.1",
+    "psycopg-pool>=3.3.1",
+    "uvicorn[standard]>=0.52.4",
+]
+
+[project.scripts]
+arxiv-query-api = "arxiv_query_api.main:run"
+
+[build-system]
+requires = ["uv_build>=0.11.2,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+arxiv-common = { workspace = true }
