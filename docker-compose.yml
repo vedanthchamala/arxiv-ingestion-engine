@@ -1,0 +1,83 @@
+name: arxiv
+
+services:
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v26.2.2
+    command:
+      - redpanda
+      - start
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
+      - --advertise-pandaproxy-addr internal://redpanda:8082,external://localhost:18082
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+      - --mode dev-container
+      - --smp 1
+      - --default-log-level=info
+    ports:
+      - "18081:18081"
+      - "18082:18082"
+      - "19092:19092"
+      - "19644:9644"
+    volumes:
+      - redpanda:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  console:
+    image: docker.redpanda.com/redpandadata/console:v3.11.0
+    entrypoint: /bin/sh
+    command: -c 'echo "$$CONSOLE_CONFIG_FILE" > /tmp/config.yml; /app/console'
+    environment:
+      CONFIG_FILEPATH: /tmp/config.yml
+      CONSOLE_CONFIG_FILE: |
+        kafka:
+          brokers: ["redpanda:9092"]
+        schemaRegistry:
+          enabled: true
+          urls: ["http://redpanda:8081"]
+    ports:
+      - "8080:8080"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: arxiv
+      POSTGRES_PASSWORD: arxiv
+      POSTGRES_DB: arxiv
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arxiv -d arxiv"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:8
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  redpanda:
+  postgres:
+  redis:

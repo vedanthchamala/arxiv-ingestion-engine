@@ -1,0 +1,14 @@
+# Rust
+rust/target/
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+# Local
+.env
+.DS_Store
+models/
+data/
+.pytest_cache/
+.ruff_cache/
