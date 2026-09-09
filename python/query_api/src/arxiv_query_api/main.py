@@ -13,6 +13,8 @@ from arxiv_common.config import Settings
 from arxiv_common.inference import InferenceClient
 from arxiv_common.logging import configure
 
+from .cache import SearchCache, scope_key
+
 settings = Settings()
 
 
@@ -44,11 +46,13 @@ class SearchResponse(BaseModel):
     query: str
     hits: list[SearchHit]
     took_ms: int
+    cached: bool = False
 
 
 class State:
     pool: ConnectionPool
     inference: InferenceClient
+    cache: SearchCache | None = None
 
 
 state = State()
@@ -66,6 +70,13 @@ async def lifespan(_app: FastAPI):
         open=True,
     )
     state.inference = InferenceClient(settings, timeout_s=60)
+    if settings.cache_enabled:
+        state.cache = SearchCache(
+            settings.redis_url,
+            embed=lambda text: state.inference.embed([text])[0],
+            ttl=settings.cache_ttl_secs,
+            distance=settings.cache_distance,
+        )
     try:
         yield
     finally:
@@ -85,9 +96,16 @@ app = FastAPI(title="arXiv semantic search", version="0.1.0", lifespan=lifespan)
 def run_search(req: SearchRequest) -> SearchResponse:
     t0 = time.monotonic()
     qvec = state.inference.embed([req.query])[0]
+    scope = scope_key(req.k, req.categories, req.since)
+    if state.cache is not None and (cached := state.cache.get(qvec, scope)) is not None:
+        resp = SearchResponse.model_validate(cached)
+        resp.query = req.query
+        resp.cached = True
+        resp.took_ms = int((time.monotonic() - t0) * 1000)
+        return resp
     with state.pool.connection() as conn:
         hits = db.search(conn, qvec, k=req.k, categories=req.categories, since=req.since)
-    return SearchResponse(
+    resp = SearchResponse(
         query=req.query,
         took_ms=int((time.monotonic() - t0) * 1000),
         hits=[
@@ -110,6 +128,9 @@ def run_search(req: SearchRequest) -> SearchResponse:
             for h in hits
         ],
     )
+    if state.cache is not None:
+        state.cache.put(req.query, qvec, scope, resp.model_dump(mode="json"))
+    return resp
 
 
 @app.post("/search", response_model=SearchResponse)
@@ -161,7 +182,16 @@ def stats() -> dict:
         "totals": dict(totals),
         "by_primary_category": [dict(r) for r in by_cat],
         "by_source": [dict(r) for r in by_source],
+        "cache": state.cache.stats() if state.cache is not None else None,
     }
+
+
+@app.delete("/cache")
+def clear_cache() -> dict:
+    if state.cache is None:
+        return {"cleared": False}
+    state.cache.clear()
+    return {"cleared": True}
 
 
 @app.get("/health")

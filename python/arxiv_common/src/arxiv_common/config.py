@@ -23,3 +23,6 @@ class Settings:
     llm_model: str = field(default_factory=lambda: _env("LLM_MODEL", "qwen3:8b"))
     summary_enabled: bool = field(default_factory=lambda: _env("SUMMARY_ENABLED", "true").lower() == "true")
     schema_path: str | None = field(default_factory=lambda: os.environ.get("ARXIV_SCHEMA_PATH"))
+    cache_enabled: bool = field(default_factory=lambda: _env("CACHE_ENABLED", "true").lower() == "true")
+    cache_ttl_secs: int = field(default_factory=lambda: int(_env("CACHE_TTL_SECS", "3600")))
+    cache_distance: float = field(default_factory=lambda: float(_env("CACHE_DISTANCE", "0.12")))
