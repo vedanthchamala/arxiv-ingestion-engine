@@ -6,7 +6,7 @@ was made. "Superseded" entries are kept so the reasoning trail stays intact.
 | # | Decision | Status |
 |---|---|---|
 | [1](#1-poll-on-a-schedule-not-continuously) | Poll arXiv every 15 min, not continuously | accepted |
-| [2](#2-one-process-owns-all-arxivorg-traffic) | One process owns all arxiv.org traffic | accepted |
+| [2](#2-one-process-owns-all-arxivorg-traffic) | One process owns all arxiv.org traffic | accepted (amended by 27) |
 | [3](#3-page-by-lastupdateddate-until-seen) | Page by `lastUpdatedDate` until already-seen, not date ranges | accepted |
 | [4](#4-redpanda-as-the-partitioned-log) | Redpanda (Kafka API), 6 partitions, key = arXiv id | accepted |
 | [5](#5-fat-messages-workers-never-re-query-arxiv) | Fat messages: workers never re-query arXiv | accepted |
@@ -23,14 +23,17 @@ was made. "Superseded" entries are kept so the reasoning trail stays intact.
 | [16](#16-embedding-model-bge-m3-1024-d) | Embedding model `BAAI/bge-m3`, 1024-d, L2-normalized | accepted |
 | [17](#17-summaries-from-a-self-hosted-7b-model) | Summaries from a self-hosted 7B instruct model | accepted |
 | [18](#18-semantic-cache-on-the-query-side-scoped-by-filters) | Semantic cache on `/search`, scoped by filters | accepted (moves from ingestion side) |
-| [19](#19-redis-does-exactly-two-jobs) | Redis: seen-set and semantic cache only | accepted |
+| [19](#19-redis-does-exactly-two-jobs) | Redis: seen-set and semantic cache only | accepted (amended by 27) |
 | [20](#20-new-versions-are-re-processed) | New paper versions are re-processed and replace old rows | accepted |
 | [21](#21-search-is-chunk-level-then-best-chunk-per-paper) | Search: chunk-level ANN, best chunk per paper, SQL filters | accepted |
 | [22](#22-backfill-through-oai-pmh) | Backfill through OAI-PMH, version-1 semantics | accepted |
 | [23](#23-never-serve-pdfs) | Never redistribute PDFs | accepted |
-| [24](#24-infra-in-compose-python-on-the-host-for-now) | Infra in docker-compose; Python services on the host via uv | accepted (provisional) |
-| [25](#25-observability-logs--redpanda-console-no-prometheus-yet) | Structured logs + Redpanda Console; no Prometheus yet | accepted (provisional) |
+| [24](#24-infra-in-compose-python-on-the-host-for-now) | Infra in docker-compose; Python services on the host via uv | accepted (amended by 29) |
+| [25](#25-observability-logs--redpanda-console-no-prometheus-yet) | Structured logs + Redpanda Console; no Prometheus yet | accepted (amended by 28) |
 | [26](#26-a-distributed-shape-for-a-workload-that-does-not-need-one) | Keep the distributed shape despite ~600 papers/day | accepted, eyes open |
+| [27](#27-one-request-budget-in-redis-shared-by-every-arxiv-facing-process) | One arXiv request budget in Redis, shared by poller, fetcher and backfill | accepted (amends 2, 19, 22) |
+| [28](#28-prometheus-metrics-on-every-stage) | Prometheus metrics on every stage; Grafana dashboard | accepted (amends 25) |
+| [29](#29-containerized-pipeline-services) | Containerized pipeline services behind a compose profile | accepted (amends 24) |
 
 ---
 
@@ -132,7 +135,7 @@ LaTeX submissions since Dec 2023 and has real section structure; PDFs need `pdft
 structure. The plan sent no-text (scanned) PDFs to the DLQ. **Decision** Try HTML, then PDF (skip
 > 20 MB), then fall back to an abstract-only document with `source = "abstract"`. **Consequences**
 A paper with no extractable text is a data limitation, not a system failure, and stays searchable;
-the DLQ is reserved for real errors. Observed on the first 5 papers: 3 HTML, 2 PDF.
+the DLQ is reserved for real errors. Observed on the first 15 papers: 13 HTML, 2 PDF.
 
 ## 13. Chunk with the embedding model's own tokenizer
 **Date** 2026-09-07 · **Context** `token_count` is only meaningful for the model that will embed
@@ -238,3 +241,51 @@ project is portfolio-first, the daily burst and backfill are real, and the user 
 it. Stage it so a usable search exists before the expensive pieces (phase 2 before 3–6).
 **Consequences** More moving parts than strictly necessary, each justified above and each verified
 end to end.
+
+## 27. One request budget in Redis, shared by every arXiv-facing process
+**Date** 2026-09-10 · **Context** Decision 2 gave each process its own in-memory `MinInterval`, so
+the poller, the fetcher and `backfill.py` could each honour the 3 s spacing while jointly violating
+it; the README's steady state (poller every 15 min *and* a fetcher) was therefore forbidden by
+decisions 2 and 22, and the fetcher had to be stopped for every backfill. **Decision** The spacing
+lives in Redis: `schemas/ratelimit.lua` atomically reserves the next send slot (`slot = max(last +
+interval, now)` on the server clock, returns the sleep) under one key, `arxiv:ratelimit`. Rust
+(`common::ratelimit::SharedMinInterval`) and Python (`arxiv_common.ratelimit`) load the same
+script, so the Lua file is the contract the way `messages.v1.json` is. A Redis error logs a warning
+and falls back to the local spacing for that call. `--local-ratelimit` opts out for offline tests.
+Slots are reserved `interval + 50 ms` apart: a sleeper can wake a millisecond late while the next
+process lands exactly on its slot, and without the guard consecutive sends measured 2998 ms.
+**Consequences** Any number of arXiv-facing processes share one FIFO budget; measured with the
+poller and fetcher running concurrently, 11 interleaved requests had a minimum gap of 3048 ms and
+none below 3000 (`scripts/ratelimit_verify.py`). The guard costs 1.7 % of throughput. Redis now does three jobs (amends 19); the single fetcher remains the right shape
+because the budget, not the process count, is the ceiling.
+
+## 28. Prometheus metrics on every stage
+**Date** 2026-09-10 · **Context** Decision 25 deferred Prometheus; logs answer "what happened to
+paper X" but not "is the pipeline keeping up", and the two numbers that matter operationally,
+consumer lag and the arXiv request rate, were only visible in Redpanda Console. **Decision** Each
+stage exposes `/metrics`: poller 9101, fetcher 9102, worker 9103, worker-abstract 9104, the API on
+its own port. Names are a cross-language contract (`arxiv_requests_total{process,kind,outcome}`,
+`arxiv_ratelimit_wait_seconds{process}`, `poller_*`, `fetcher_*`, `worker_*{group}`,
+`api_*{cached}`), defined once per language (`common::telemetry`, `arxiv_common.metrics`). Prometheus
+and Grafana run under the compose `observability` profile and also scrape Redpanda's
+`/public_metrics` with `enable_consumer_group_metrics` set to include `consumer_lag` (done by
+`dev.sh`); one provisioned dashboard covers throughput per stage, p50/p95 latencies, dead letters,
+cache hit rate and lag. Counters and histograms only; the arXiv id stays in the logs.
+**Consequences** Lag and the 20 req/min ceiling are graphable and alertable; metric names must
+change in both languages together; one exporter thread or task per process.
+
+## 29. Containerized pipeline services
+**Date** 2026-09-10 · **Context** Decision 24 kept the binaries and services on the host for fast
+iteration; the pipeline is now feature-complete and a reader should be able to run it with one
+command, and host assumptions (localhost ports, `uv`/`cargo` on `PATH`) had leaked into the
+configuration. **Decision** `rust/Dockerfile` (rust 1.97 builder with BuildKit cache mounts for
+the registry and the incremental `target/`; debian-slim runtime with `poppler-utils`, non-root,
+`HF_HOME` on a volume for the tokenizer) and `python/Dockerfile` (python 3.13-slim with `uv` pinned
+to the lockfile's version, `uv sync --frozen --all-packages`, `schemas/` copied in, non-root), both
+built from the repo root so they can reach `schemas/`. Five services sit behind the compose profile
+`pipeline`; without it `docker compose up -d` is exactly decision 24's four infra services. The
+fetcher is pinned to one replica (decision 2) and depends on Redis for the shared budget (27).
+**Consequences** A cold build takes about a minute on the M4 Pro, rebuilds seconds.
+`scripts/pipeline.sh` and `scripts/run.sh` keep working for host-side runs, so 24 is amended, not
+superseded. `.env` values written for the host (`localhost:11434`) are wrong inside a container:
+override them on the command line or point at the Spark.

@@ -5,7 +5,9 @@ summary per paper, and serve semantic search over them. Portfolio project first,
 
 ## Constraints that shape the design (arXiv terms of use, verified 2026-09-07)
 - **One request every 3 s, single connection, across all machines you control.** Applies to the API,
-  RSS, OAI-PMH and PDF downloads. Therefore exactly one process talks to arxiv.org at a time.
+  RSS, OAI-PMH and PDF downloads. Therefore every arXiv-facing process (poller, fetcher, backfill)
+  reserves its send slot from one shared budget in Redis (`schemas/ratelimit.lua`), and only one
+  fetcher instance ever runs.
 - New papers are announced once a day (~20:00 ET, Sun–Thu). "Real time" means minutes after that.
 - The API returns full metadata (authors, categories, dates, PDF link, DOI); nothing needs re-fetching.
 - `submittedDate` range queries are unreliable (time out); the poller pages by `lastUpdatedDate`
@@ -28,8 +30,8 @@ every database write is an upsert keyed on `arxiv_id` / `arxiv_id:chunk_idx`.
 | Vector store | pgvector in the same Postgres | one transaction per paper; SQL filters + ANN in one query; one fewer service |
 | Languages | Rust: poller + fetcher. Python: worker + query API | Rust owns I/O and rate limiting; Python owns ML-adjacent work. Not two implementations of one job |
 | Queue | Redpanda | user asked for a partitioned log; single arm64 binary; Console for lag/DLQ |
-| Inference | vLLM on DGX Spark, OpenAI-compatible | embeddings `BAAI/bge-m3` (1024-d), summaries Qwen3-8B-class |
-| Redis | seen-set (`arxiv:seen`, members `IDvN`) + semantic cache on `/search` | ingestion has nothing to semantically cache |
+| Inference | vLLM on DGX Spark, OpenAI-compatible | embeddings `BAAI/bge-m3` (1024-d), summaries `Qwen2.5-7B-Instruct` |
+| Redis | seen-set (`arxiv:seen`, members `IDvN`) + shared arXiv request budget (`arxiv:ratelimit`) + semantic cache on `/search` | ingestion has nothing to semantically cache; the budget must be cross-process |
 | Full text | prefer `arxiv.org/html/{id}`, fall back to PDF via `pdftotext`, else abstract-only | HTML has section structure; PDFs > 20 MB or without text degrade to abstract-only (a data limitation, not a failure); the DLQ is for real errors after retries |
 
 ## Message contracts
@@ -46,6 +48,11 @@ search works immediately and improves as the fetcher catches up at arXiv's pace.
 ## Storage
 `sql/001_init.sql`: `papers`, `authors`, `paper_authors`, `chunks(embedding vector(1024), HNSW cosine)`.
 Re-processing a new version deletes that paper's chunks and re-inserts inside the same transaction.
+
+## Observability
+Every stage exports Prometheus metrics (`poller_*`, `fetcher_*`, `worker_*`, `api_*`, `arxiv_requests_total`,
+`arxiv_ratelimit_wait_seconds`); Prometheus + Grafana run under the compose `observability` profile with one
+provisioned dashboard. Logs are structured and keyed by `arxiv_id`.
 
 ## Non-goals (for now)
 Serving PDFs (arXiv ToU forbids redistribution), multi-node Kafka, auth on the query API.
