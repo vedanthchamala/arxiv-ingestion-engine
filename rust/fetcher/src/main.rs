@@ -10,14 +10,14 @@ use chrono::Utc;
 use chunk::Chunker;
 use clap::Parser;
 use common::kafka;
-use common::models::{ChunkedPaper, Failed, Paper, Stage, TextSource, SCHEMA_VERSION};
-use common::schema::{validate_and_serialize, Validators};
+use common::models::{ChunkedPaper, Failed, Paper, SCHEMA_VERSION, Stage, TextSource};
+use common::schema::{Validators, validate_and_serialize};
 use fetch::Fetcher;
 use html::Section;
+use rdkafka::Message;
 use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
 use rdkafka::message::BorrowedMessage;
 use rdkafka::producer::FutureProducer;
-use rdkafka::Message;
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
@@ -93,14 +93,25 @@ async fn main() -> Result<()> {
     pdf::ensure_pdftotext().await?;
     info!(tokenizer = %args.tokenizer, "loading tokenizer (downloads on first run)");
     let chunker = Chunker::from_pretrained(&args.tokenizer, args.chunk_tokens, args.chunk_overlap, args.max_chunks)?;
-    let fetcher = Fetcher::new(&args.user_agent, Duration::from_secs(args.min_request_interval_secs), args.max_pdf_mb * 1024 * 1024)?;
+    let fetcher = Fetcher::new(
+        &args.user_agent,
+        Duration::from_secs(args.min_request_interval_secs),
+        args.max_pdf_mb * 1024 * 1024,
+    )?;
     let consumer = kafka::consumer(&args.brokers, &args.group)?;
     consumer.subscribe(&[args.topic_in.as_str()]).context("subscribe")?;
     let producer = kafka::producer(&args.brokers)?;
     let validators = Validators::load()?;
     info!(topic_in = %args.topic_in, topic_out = %args.topic_out, group = %args.group, "fetcher started");
 
-    let ctx = Ctx { args, fetcher, chunker, consumer, producer, validators };
+    let ctx = Ctx {
+        args,
+        fetcher,
+        chunker,
+        consumer,
+        producer,
+        validators,
+    };
     let mut stats = Stats::default();
     let mut last_report = Instant::now();
 
@@ -117,19 +128,34 @@ async fn main() -> Result<()> {
             error!(error = %e, "commit failed");
         }
         if last_report.elapsed() > Duration::from_secs(30) {
-            info!(html = stats.html, pdf = stats.pdf, abstract_only = stats.abstract_only, failed = stats.failed, "progress");
+            info!(
+                html = stats.html,
+                pdf = stats.pdf,
+                abstract_only = stats.abstract_only,
+                failed = stats.failed,
+                "progress"
+            );
             last_report = Instant::now();
         }
         if ctx.args.max_messages.is_some_and(|n| stats.total() >= n) {
             break;
         }
     }
-    info!(html = stats.html, pdf = stats.pdf, abstract_only = stats.abstract_only, failed = stats.failed, "fetcher stopped");
+    info!(
+        html = stats.html,
+        pdf = stats.pdf,
+        abstract_only = stats.abstract_only,
+        failed = stats.failed,
+        "fetcher stopped"
+    );
     Ok(())
 }
 
 async fn handle(ctx: &Ctx, msg: &BorrowedMessage<'_>, stats: &mut Stats) {
-    let key = msg.key().map(|k| String::from_utf8_lossy(k).into_owned()).unwrap_or_else(|| "?".into());
+    let key = msg
+        .key()
+        .map(|k| String::from_utf8_lossy(k).into_owned())
+        .unwrap_or_else(|| "?".into());
     let payload = msg.payload().unwrap_or_default();
     let paper: Paper = match serde_json::from_slice(payload) {
         Ok(p) => p,
@@ -169,7 +195,13 @@ async fn process(ctx: &Ctx, paper: &Paper) -> Result<(TextSource, usize)> {
     let (source, sections) = full_text(ctx, paper).await?;
     let chunks = ctx.chunker.chunk(paper, &sections)?;
     let n = chunks.len();
-    let doc = ChunkedPaper { schema_version: SCHEMA_VERSION, paper: paper.clone(), source, chunks, fetched_at: Utc::now() };
+    let doc = ChunkedPaper {
+        schema_version: SCHEMA_VERSION,
+        paper: paper.clone(),
+        source,
+        chunks,
+        fetched_at: Utc::now(),
+    };
     let bytes = validate_and_serialize(&ctx.validators.chunked, &doc)?;
     kafka::send(&ctx.producer, &ctx.args.topic_out, paper.key(), &bytes).await?;
     Ok((source, n))
@@ -180,24 +212,26 @@ async fn process(ctx: &Ctx, paper: &Paper) -> Result<(TextSource, usize)> {
 async fn full_text(ctx: &Ctx, paper: &Paper) -> Result<(TextSource, Vec<Section>)> {
     if !ctx.args.no_html
         && let Some(url) = &paper.html_url
-            && let Some(body) = ctx.fetcher.html(url).await? {
-                let sections = html::extract_sections(&body);
-                if !sections.is_empty() {
-                    return Ok((TextSource::Html, sections));
-                }
-                warn!(id = %paper.versioned_id(), "html page had no usable sections");
-            }
-    if !ctx.args.no_pdf
-        && let Some(bytes) = ctx.fetcher.pdf(&paper.pdf_url).await? {
-            let tmp = tempfile::Builder::new().suffix(".pdf").tempfile().context("tempfile")?;
-            tokio::fs::write(tmp.path(), &bytes).await.context("write pdf")?;
-            let raw = pdf::pdftotext(tmp.path()).await?;
-            let sections = pdf::into_sections(&pdf::clean(&raw));
-            if !sections.is_empty() {
-                return Ok((TextSource::Pdf, sections));
-            }
-            warn!(id = %paper.versioned_id(), "pdf had no extractable text (scanned?)");
+        && let Some(body) = ctx.fetcher.html(url).await?
+    {
+        let sections = html::extract_sections(&body);
+        if !sections.is_empty() {
+            return Ok((TextSource::Html, sections));
         }
+        warn!(id = %paper.versioned_id(), "html page had no usable sections");
+    }
+    if !ctx.args.no_pdf
+        && let Some(bytes) = ctx.fetcher.pdf(&paper.pdf_url).await?
+    {
+        let tmp = tempfile::Builder::new().suffix(".pdf").tempfile().context("tempfile")?;
+        tokio::fs::write(tmp.path(), &bytes).await.context("write pdf")?;
+        let raw = pdf::pdftotext(tmp.path()).await?;
+        let sections = pdf::into_sections(&pdf::clean(&raw));
+        if !sections.is_empty() {
+            return Ok((TextSource::Pdf, sections));
+        }
+        warn!(id = %paper.versioned_id(), "pdf had no extractable text (scanned?)");
+    }
     Ok((TextSource::Abstract, Vec::new()))
 }
 

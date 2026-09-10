@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 use common::models::{Paper, SCHEMA_VERSION};
 use common::ratelimit::MinInterval;
@@ -84,7 +84,12 @@ pub fn parse_feed(xml: &str, polled_at: DateTime<Utc>) -> Result<Page> {
 
 fn parse_entry(entry: Node, polled_at: DateTime<Utc>) -> Result<Option<Paper>> {
     let raw_id = child_text(entry, ATOM, "id").ok_or_else(|| anyhow!("entry without <id>"))?;
-    let Some(versioned) = raw_id.trim().rsplit("/abs/").next().filter(|_| raw_id.contains("/abs/")) else {
+    let Some(versioned) = raw_id
+        .trim()
+        .rsplit("/abs/")
+        .next()
+        .filter(|_| raw_id.contains("/abs/"))
+    else {
         // The API reports query errors as a pseudo-entry with an /api/errors# id.
         warn!(id = raw_id.trim(), "non-paper entry in feed");
         return Ok(None);
@@ -191,7 +196,10 @@ fn is(n: &Node, ns: &str, name: &str) -> bool {
 }
 
 fn child_text(n: Node, ns: &str, name: &str) -> Option<String> {
-    n.children().find(|c| is(c, ns, name)).and_then(|c| c.text()).map(str::to_string)
+    n.children()
+        .find(|c| is(c, ns, name))
+        .and_then(|c| c.text())
+        .map(str::to_string)
 }
 
 #[cfg(test)]

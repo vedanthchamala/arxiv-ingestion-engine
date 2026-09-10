@@ -1,7 +1,7 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use jsonschema::Validator;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// The shared contract, embedded at compile time so binaries never depend on the working directory.
 pub const MESSAGES_V1: &str = include_str!("../../../schemas/messages.v1.json");

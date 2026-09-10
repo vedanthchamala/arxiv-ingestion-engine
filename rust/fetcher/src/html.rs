@@ -56,7 +56,10 @@ pub fn extract_sections(html: &str) -> Vec<Section> {
         collect_paragraphs(article, &mut paragraphs);
         let text = paragraphs.join("\n\n");
         if text.len() >= 200 {
-            out.push(Section { title: "Body".to_string(), text });
+            out.push(Section {
+                title: "Body".to_string(),
+                text,
+            });
         }
     }
     out
@@ -68,7 +71,11 @@ fn has_class(el: &ElementRef, class: &str) -> bool {
 
 fn is_skipped(el: &ElementRef) -> bool {
     let name = el.value().name();
-    name == "math" || name == "table" || name == "script" || name == "style" || SKIP_CLASSES.iter().any(|c| has_class(el, c))
+    name == "math"
+        || name == "table"
+        || name == "script"
+        || name == "style"
+        || SKIP_CLASSES.iter().any(|c| has_class(el, c))
 }
 
 /// Paragraph-level text (`p.ltx_p`), plus figure captions, with skipped subtrees removed.
@@ -142,7 +149,11 @@ mod tests {
         assert_eq!(secs.len(), 1);
         assert_eq!(secs[0].title, "1 Introduction");
         assert!(secs[0].text.contains("Robots are cool"));
-        assert!(secs[0].text.contains("Nested paragraph text with inline math removed here."));
+        assert!(
+            secs[0]
+                .text
+                .contains("Nested paragraph text with inline math removed here.")
+        );
         assert!(secs[0].text.contains("Figure 1: A caption"));
         assert!(!secs[0].text.contains("mc^2"));
         assert!(!secs[0].text.contains("reference entry"));

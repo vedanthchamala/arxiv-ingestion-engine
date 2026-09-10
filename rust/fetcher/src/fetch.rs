@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use common::ratelimit::MinInterval;
 use reqwest::StatusCode;
 use tracing::{debug, warn};
@@ -19,7 +19,11 @@ impl Fetcher {
             .user_agent(user_agent)
             .timeout(Duration::from_secs(120))
             .build()?;
-        Ok(Self { http, limiter: MinInterval::new(min_interval), max_pdf_bytes })
+        Ok(Self {
+            http,
+            limiter: MinInterval::new(min_interval),
+            max_pdf_bytes,
+        })
     }
 
     /// `Ok(None)` when arXiv has no HTML rendering for this version.
@@ -51,10 +55,11 @@ impl Fetcher {
             s => bail!("pdf {url}: HTTP {s}"),
         }
         if let Some(len) = resp.content_length()
-            && len as usize > self.max_pdf_bytes {
-                warn!(url, bytes = len, "pdf over size cap; skipping full text");
-                return Ok(None);
-            }
+            && len as usize > self.max_pdf_bytes
+        {
+            warn!(url, bytes = len, "pdf over size cap; skipping full text");
+            return Ok(None);
+        }
         let bytes = resp.bytes().await.context("pdf body")?;
         if bytes.len() > self.max_pdf_bytes {
             warn!(url, bytes = bytes.len(), "pdf over size cap; skipping full text");

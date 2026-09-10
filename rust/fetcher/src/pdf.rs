@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use regex::Regex;
 use tokio::process::Command;
 
@@ -19,7 +19,11 @@ static SECTION_HEADING: LazyLock<Regex> = LazyLock::new(|| {
 static HYPHEN_BREAK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\w)-\n(\w)").unwrap());
 
 pub async fn ensure_pdftotext() -> Result<()> {
-    let out = Command::new("pdftotext").arg("-v").output().await.context("pdftotext not found on PATH (install poppler)")?;
+    let out = Command::new("pdftotext")
+        .arg("-v")
+        .output()
+        .await
+        .context("pdftotext not found on PATH (install poppler)")?;
     if !out.status.success() && out.stderr.is_empty() {
         bail!("pdftotext -v failed");
     }
@@ -27,10 +31,20 @@ pub async fn ensure_pdftotext() -> Result<()> {
 }
 
 pub async fn pdftotext(path: &Path) -> Result<String> {
-    let run = Command::new("pdftotext").args(["-enc", "UTF-8", "-nopgbrk"]).arg(path).arg("-").output();
-    let out = tokio::time::timeout(Duration::from_secs(90), run).await.map_err(|_| anyhow!("pdftotext timed out"))??;
+    let run = Command::new("pdftotext")
+        .args(["-enc", "UTF-8", "-nopgbrk"])
+        .arg(path)
+        .arg("-")
+        .output();
+    let out = tokio::time::timeout(Duration::from_secs(90), run)
+        .await
+        .map_err(|_| anyhow!("pdftotext timed out"))??;
     if !out.status.success() {
-        bail!("pdftotext exited {}: {}", out.status, String::from_utf8_lossy(&out.stderr).trim());
+        bail!(
+            "pdftotext exited {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
@@ -67,7 +81,10 @@ pub fn into_sections(clean_text: &str) -> Vec<Section> {
         .collect();
     if heads.len() < 3 {
         return if clean_text.len() >= 200 {
-            vec![Section { title: "Body".into(), text: clean_text.to_string() }]
+            vec![Section {
+                title: "Body".into(),
+                text: clean_text.to_string(),
+            }]
         } else {
             Vec::new()
         };
@@ -75,13 +92,19 @@ pub fn into_sections(clean_text: &str) -> Vec<Section> {
     let mut out = Vec::new();
     let preamble = clean_text[..heads[0].0].trim();
     if preamble.len() >= 200 {
-        out.push(Section { title: "Front matter".into(), text: preamble.to_string() });
+        out.push(Section {
+            title: "Front matter".into(),
+            text: preamble.to_string(),
+        });
     }
     for (i, (_, end, title)) in heads.iter().enumerate() {
         let stop = heads.get(i + 1).map(|h| h.0).unwrap_or(clean_text.len());
         let text = clean_text[*end..stop].trim();
         if text.len() >= 40 {
-            out.push(Section { title: title.clone(), text: text.to_string() });
+            out.push(Section {
+                title: title.clone(),
+                text: text.to_string(),
+            });
         }
     }
     out

@@ -12,7 +12,10 @@ pub struct MinInterval {
 
 impl MinInterval {
     pub fn new(min: Duration) -> Self {
-        Self { min, last: Mutex::new(None) }
+        Self {
+            min,
+            last: Mutex::new(None),
+        }
     }
 
     /// Resolves when the caller may issue its request. The lock is held while sleeping on

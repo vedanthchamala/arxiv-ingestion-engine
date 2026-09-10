@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use arxiv::ArxivClient;
 use clap::Parser;
 use common::kafka;
-use common::schema::{validate_and_serialize, Validators};
+use common::schema::{Validators, validate_and_serialize};
 use rdkafka::producer::FutureProducer;
 use redis::AsyncCommands;
 use tokio::time::sleep;
@@ -24,7 +24,12 @@ struct Args {
     seen_key: String,
     #[arg(long, env = "TOPIC_PAPERS_NEW", default_value = "papers.new")]
     topic: String,
-    #[arg(long, env = "ARXIV_CATEGORIES", default_value = "cs.LG,cs.CV,cs.RO", value_delimiter = ',')]
+    #[arg(
+        long,
+        env = "ARXIV_CATEGORIES",
+        default_value = "cs.LG,cs.CV,cs.RO",
+        value_delimiter = ','
+    )]
     categories: Vec<String>,
     #[arg(long, env = "ARXIV_POLL_INTERVAL_SECS", default_value_t = 900)]
     interval_secs: u64,
@@ -76,7 +81,13 @@ async fn main() -> Result<()> {
         .await
         .context("redis connect")?;
     let validators = Validators::load()?;
-    let mut ctx = Ctx { args, arxiv, producer, redis, validators };
+    let mut ctx = Ctx {
+        args,
+        arxiv,
+        producer,
+        redis,
+        validators,
+    };
 
     loop {
         let started = std::time::Instant::now();
@@ -85,7 +96,15 @@ async fn main() -> Result<()> {
         for category in &categories {
             match poll_category(&mut ctx, category).await {
                 Ok(s) => {
-                    info!(category, pages = s.pages, fetched = s.fetched, produced = s.produced, seen = s.skipped_seen, invalid = s.invalid, "category done");
+                    info!(
+                        category,
+                        pages = s.pages,
+                        fetched = s.fetched,
+                        produced = s.produced,
+                        seen = s.skipped_seen,
+                        invalid = s.invalid,
+                        "category done"
+                    );
                     total.pages += s.pages;
                     total.fetched += s.fetched;
                     total.produced += s.produced;
@@ -95,7 +114,13 @@ async fn main() -> Result<()> {
                 Err(e) => error!(category, error = %e, "category failed; continuing"),
             }
         }
-        info!(produced = total.produced, fetched = total.fetched, pages = total.pages, elapsed_s = started.elapsed().as_secs(), "cycle done");
+        info!(
+            produced = total.produced,
+            fetched = total.fetched,
+            pages = total.pages,
+            elapsed_s = started.elapsed().as_secs(),
+            "cycle done"
+        );
 
         if ctx.args.once {
             break;
@@ -123,7 +148,11 @@ async fn poll_category(ctx: &mut Ctx, category: &str) -> Result<CycleStats> {
         for paper in page.entries {
             stats.fetched += 1;
             let member = paper.seen_member();
-            let seen: bool = ctx.redis.sismember(&ctx.args.seen_key, &member).await.context("redis sismember")?;
+            let seen: bool = ctx
+                .redis
+                .sismember(&ctx.args.seen_key, &member)
+                .await
+                .context("redis sismember")?;
             if seen {
                 stats.skipped_seen += 1;
                 continue;
@@ -140,7 +169,11 @@ async fn poll_category(ctx: &mut Ctx, category: &str) -> Result<CycleStats> {
                 // Produce first, then mark seen: a crash in between yields a duplicate (workers
                 // upsert), never a lost paper.
                 kafka::send(&ctx.producer, &ctx.args.topic, paper.key(), &payload).await?;
-                let _: i64 = ctx.redis.sadd(&ctx.args.seen_key, &member).await.context("redis sadd")?;
+                let _: i64 = ctx
+                    .redis
+                    .sadd(&ctx.args.seen_key, &member)
+                    .await
+                    .context("redis sadd")?;
             }
             stats.produced += 1;
             new_in_page += 1;
@@ -162,7 +195,13 @@ async fn fetch_page_with_retry(ctx: &Ctx, category: &str, start: usize) -> Resul
     for attempt in 1..=4u32 {
         match ctx.arxiv.category_page(category, start, ctx.args.page_size).await {
             Ok(page) if page.entries.is_empty() && start < page.total_results && attempt < 4 => {
-                warn!(category, start, attempt, total = page.total_results, "empty page from arxiv; retrying");
+                warn!(
+                    category,
+                    start,
+                    attempt,
+                    total = page.total_results,
+                    "empty page from arxiv; retrying"
+                );
             }
             Ok(page) => return Ok(page),
             Err(e) => {
