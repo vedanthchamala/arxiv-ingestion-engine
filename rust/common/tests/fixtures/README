@@ -1,0 +1,4 @@
+Messages produced by the Python side (arxiv_common.schema.dumps on pydantic models), consumed by the
+cross-language test in src/schema.rs. Regenerate from the repo root with:
+
+  uv run --project python python rust/common/tests/fixtures/generate.py

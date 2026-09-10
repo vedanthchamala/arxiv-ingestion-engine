@@ -47,8 +47,12 @@ pub fn validate_and_serialize<T: Serialize>(validator: &Validator, value: &T) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{Paper, SCHEMA_VERSION};
+    use crate::models::{ChunkedPaper, Failed, Paper, SCHEMA_VERSION, Stage, TextSource};
     use chrono::Utc;
+
+    /// Written by `arxiv_common.schema.dumps` (pydantic models); see tests/fixtures/README.
+    const PYTHON_FAILED: &str = include_str!("../tests/fixtures/python_failed.json");
+    const PYTHON_CHUNKED: &str = include_str!("../tests/fixtures/python_chunked.json");
 
     fn sample() -> Paper {
         Paper {
@@ -78,6 +82,36 @@ mod tests {
         let back: Paper = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(back.abstract_text, "An abstract.");
         assert_eq!(back.seen_member(), "2609.01234v2");
+    }
+
+    /// The reverse of the Python suite's check on a Rust-produced `paper`: messages the Python
+    /// worker produces must parse into the Rust structs and pass the shared schema.
+    #[test]
+    fn python_produced_failed_and_chunked_are_accepted() {
+        let v = Validators::load().unwrap();
+
+        let raw: Value = serde_json::from_str(PYTHON_FAILED).unwrap();
+        assert!(v.failed.validate(&raw).is_ok(), "python failed message violates schema");
+        let failed: Failed = serde_json::from_str(PYTHON_FAILED).unwrap();
+        assert_eq!(failed.stage, Stage::Worker);
+        assert_eq!(failed.attempts, 3);
+        assert_eq!(failed.arxiv_id, "2609.01234");
+        assert_eq!(failed.payload["arxiv_id"], "2609.01234");
+        validate_and_serialize(&v.failed, &failed).unwrap();
+
+        let raw: Value = serde_json::from_str(PYTHON_CHUNKED).unwrap();
+        assert!(
+            v.chunked.validate(&raw).is_ok(),
+            "python chunked message violates schema"
+        );
+        let doc: ChunkedPaper = serde_json::from_str(PYTHON_CHUNKED).unwrap();
+        assert_eq!(doc.source, TextSource::Abstract);
+        assert_eq!(doc.chunks.len(), 1);
+        assert_eq!(doc.chunks[0].section.as_deref(), Some("abstract"));
+        assert!(doc.chunks[0].text.starts_with(&doc.paper.title));
+        assert_eq!(doc.paper.html_url, None);
+        assert_eq!(doc.paper.seen_member(), "2609.01234v1");
+        validate_and_serialize(&v.chunked, &doc).unwrap();
     }
 
     #[test]
