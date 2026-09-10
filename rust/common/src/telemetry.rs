@@ -1,3 +1,4 @@
+use std::io::IsTerminal;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
@@ -14,6 +15,7 @@ pub fn init() {
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_target(false)
+        .with_ansi(std::io::stdout().is_terminal())
         .init();
 }
 

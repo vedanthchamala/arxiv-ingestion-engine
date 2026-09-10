@@ -4,6 +4,7 @@
 #   scripts/run.sh start [name...]   # default: all five
 #   scripts/run.sh stop  [name...]   # SIGINT/SIGTERM; in-flight message finishes and commits
 #   scripts/run.sh status | logs <name>
+# API_PORT=8001 scripts/run.sh start api   # move the API off :8000
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ALL=(poller fetcher worker worker-abstract api)
@@ -15,9 +16,8 @@ alive()  { local p; p=$(pid_of "$1"); [[ -n "$p" ]] && kill -0 "$p" 2>/dev/null;
 start() {
   for n in "$@"; do
     if alive "$n"; then echo "running  $n (pid $(pid_of "$n"))"; continue; fi
-    setsid nohup scripts/pipeline.sh "$n" >>"data/logs/$n.log" 2>&1 &
-    echo $! >"data/run/$n.pid"
-    echo "started  $n (pid $!) -> data/logs/$n.log"
+    ( nohup scripts/pipeline.sh "$n" >>"data/logs/$n.log" 2>&1 & echo $! >"data/run/$n.pid" )
+    echo "started  $n (pid $(cat "data/run/$n.pid")) -> data/logs/$n.log"
   done
 }
 stop() {

@@ -1,3 +1,4 @@
+import os
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -221,4 +222,6 @@ def prometheus_metrics() -> Response:
 
 
 def run() -> None:
-    uvicorn.run("arxiv_query_api.main:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run(
+        "arxiv_query_api.main:app", host="0.0.0.0", port=int(os.environ.get("API_PORT", "8000")), reload=False
+    )
