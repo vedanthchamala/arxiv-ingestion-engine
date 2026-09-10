@@ -3,12 +3,13 @@ import json
 import signal
 import time
 from datetime import UTC, datetime
+from typing import Literal
 
 import psycopg
 import structlog
 from confluent_kafka import Consumer, KafkaError, KafkaException, Message, Producer
 
-from arxiv_common import db, schema
+from arxiv_common import db, metrics, schema
 from arxiv_common.config import Settings
 from arxiv_common.inference import InferenceClient, InferenceError
 from arxiv_common.logging import configure
@@ -19,6 +20,8 @@ log = structlog.get_logger()
 MAX_ATTEMPTS = 3
 BACKOFF_S = (2, 8, 20)
 
+DeadLetterReason = Literal["poison", "retries_exhausted", "db_unavailable"]
+
 
 class Poison(Exception):
     """Message can never succeed (bad JSON, schema violation): dead-letter without retrying."""
@@ -28,6 +31,7 @@ class Worker:
     def __init__(self, settings: Settings, topic: str, group: str, summary: bool) -> None:
         self.settings = settings
         self.topic = topic
+        self.group = group
         self.summary_enabled = summary
         self.consumer = Consumer(
             {
@@ -40,12 +44,21 @@ class Worker:
                 "partition.assignment.strategy": "cooperative-sticky",
             }
         )
-        self.producer = Producer({"bootstrap.servers": settings.kafka_brokers, "acks": "all"})
+        self.producer = Producer(
+            {
+                "bootstrap.servers": settings.kafka_brokers,
+                "acks": "all",
+                "enable.idempotence": True,
+                "compression.type": "gzip",
+                "message.timeout.ms": 30_000,
+            }
+        )
         self.inference = InferenceClient(settings)
         self.conn = db.connect(settings.database_url)
         self.stop = False
         self.processed = 0
         self.failed = 0
+        metrics.init_worker_labels(group)
 
     # -- message handling -------------------------------------------------------------------
 
@@ -64,28 +77,37 @@ class Worker:
             raise Poison(str(e)) from e
 
     def process(self, doc: ChunkedPaper) -> None:
-        embeddings = self.inference.embed([c.text for c in doc.chunks])
+        with metrics.WORKER_EMBED_SECONDS.labels(self.group).time():
+            embeddings = self.inference.embed([c.text for c in doc.chunks])
         summary = None
         model = None
         if self.summary_enabled:
             intro = next((c.text for c in doc.chunks if c.section and "intro" in c.section.lower()), None)
-            summary = self.inference.summarize(doc.paper.title, doc.paper.abstract, intro)
+            with metrics.WORKER_SUMMARIZE_SECONDS.labels(self.group).time():
+                summary = self.inference.summarize(doc.paper.title, doc.paper.abstract, intro)
             model = self.settings.llm_model
         db.upsert_paper(self.conn, doc, embeddings, summary, model)
+        metrics.WORKER_CHUNKS.labels(self.group).inc(len(doc.chunks))
 
     def handle(self, msg: Message) -> None:
+        with metrics.WORKER_PROCESS_SECONDS.labels(self.group).time():
+            self._handle(msg)
+
+    def _handle(self, msg: Message) -> None:
         key = (msg.key() or b"?").decode(errors="replace")
         started = time.monotonic()
         try:
             doc = self.parse(msg)
         except Poison as e:
-            self.dead_letter(key, msg, str(e), attempts=1)
+            self.dead_letter(key, msg, str(e), attempts=1, reason="poison")
             return
         blog = log.bind(arxiv_id=doc.paper.versioned_id, chunks=len(doc.chunks), source=doc.source)
         for attempt in range(1, MAX_ATTEMPTS + 1):
+            metrics.WORKER_ATTEMPTS.labels(self.group).inc()
             try:
                 self.process(doc)
                 self.processed += 1
+                metrics.WORKER_MESSAGES.labels(self.group, "stored").inc()
                 blog.info("stored", attempt=attempt, ms=int((time.monotonic() - started) * 1000))
                 return
             except psycopg.OperationalError as e:
@@ -97,12 +119,16 @@ class Worker:
                 if attempt < MAX_ATTEMPTS:
                     time.sleep(BACKOFF_S[attempt - 1])
                     continue
-                self.dead_letter(key, msg, last, attempts=attempt)
+                self.dead_letter(key, msg, last, attempts=attempt, reason="retries_exhausted")
                 return
-        self.dead_letter(key, msg, "database unavailable", attempts=MAX_ATTEMPTS)
+        self.dead_letter(key, msg, "database unavailable", attempts=MAX_ATTEMPTS, reason="db_unavailable")
 
-    def dead_letter(self, key: str, msg: Message, error: str, attempts: int) -> None:
+    def dead_letter(
+        self, key: str, msg: Message, error: str, attempts: int, reason: DeadLetterReason
+    ) -> None:
         self.failed += 1
+        metrics.WORKER_MESSAGES.labels(self.group, "failed").inc()
+        metrics.WORKER_DEAD_LETTERS.labels(self.group, reason).inc()
         try:
             payload = json.loads(msg.value())
             if not isinstance(payload, dict):
@@ -121,7 +147,7 @@ class Worker:
             self.settings.topic_failed, key=key.encode(), value=schema.dumps("failed", failed)
         )
         self.producer.flush(10)
-        log.error("dead-lettered", arxiv_id=key, error=error[:300], attempts=attempts)
+        log.error("dead-lettered", arxiv_id=key, error=error[:300], attempts=attempts, reason=reason)
 
     def reconnect_db(self) -> None:
         try:
@@ -143,6 +169,7 @@ class Worker:
         log.info(
             "worker started",
             topic=self.topic,
+            group=self.group,
             summary=self.summary_enabled,
             embedding=self.settings.embedding_url,
             llm=self.settings.llm_url,
@@ -179,9 +206,13 @@ def main() -> None:
     ap.add_argument("--group", default="worker")
     ap.add_argument("--max-messages", type=int, default=None, help="exit after N messages (testing)")
     ap.add_argument("--no-summary", action="store_true", help="skip the LLM summary step")
+    ap.add_argument(
+        "--metrics-port", type=int, default=settings.metrics_port, help="Prometheus /metrics port; 0 disables"
+    )
     ap.add_argument("--log-level", default="INFO")
     args = ap.parse_args()
     configure(args.log_level)
+    metrics.start_metrics_server(args.metrics_port)
 
     summary = settings.summary_enabled and not args.no_summary
     worker = Worker(settings, args.topic, args.group, summary=summary)

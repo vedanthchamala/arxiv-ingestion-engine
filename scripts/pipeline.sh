@@ -13,8 +13,8 @@ cmd="${1:-}"; shift || true
 case "$cmd" in
   poller)          exec cargo run --release --manifest-path rust/Cargo.toml -q -p poller -- "$@" ;;
   fetcher)         exec cargo run --release --manifest-path rust/Cargo.toml -q -p fetcher -- "$@" ;;
-  worker-abstract) exec uv run --project python -q arxiv-worker --topic "${TOPIC_PAPERS_NEW:-papers.new}" --group worker-abstract --no-summary "$@" ;;
-  worker)          exec uv run --project python -q arxiv-worker --topic "${TOPIC_PAPERS_CHUNKED:-papers.chunked}" --group worker "$@" ;;
+  worker-abstract) exec uv run --project python -q arxiv-worker --topic "${TOPIC_PAPERS_NEW:-papers.new}" --group worker-abstract --no-summary --metrics-port 9104 "$@" ;;
+  worker)          exec uv run --project python -q arxiv-worker --topic "${TOPIC_PAPERS_CHUNKED:-papers.chunked}" --group worker --metrics-port 9103 "$@" ;;
   api)             exec uv run --project python -q arxiv-query-api "$@" ;;
   *) sed -n '2,8p' "$0"; exit 1 ;;
 esac

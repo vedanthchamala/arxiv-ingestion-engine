@@ -3,12 +3,13 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, Field
 
-from arxiv_common import db
+from arxiv_common import db, metrics
 from arxiv_common.config import Settings
 from arxiv_common.inference import InferenceClient
 from arxiv_common.logging import configure
@@ -61,11 +62,12 @@ state = State()
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     configure()
+    metrics.init_api_labels()
     state.pool = ConnectionPool(
         settings.database_url,
         min_size=1,
         max_size=8,
-        kwargs={"row_factory": dict_row},
+        kwargs={"row_factory": dict_row, "prepare_threshold": None},
         configure=_register_vector,
         open=True,
     )
@@ -95,15 +97,18 @@ app = FastAPI(title="arXiv semantic search", version="0.1.0", lifespan=lifespan)
 
 def run_search(req: SearchRequest) -> SearchResponse:
     t0 = time.monotonic()
-    qvec = state.inference.embed([req.query])[0]
+    with metrics.API_EMBED_SECONDS.time():
+        qvec = state.inference.embed([req.query])[0]
     scope = scope_key(req.k, req.categories, req.since)
-    if state.cache is not None and (cached := state.cache.get(qvec, scope)) is not None:
-        resp = SearchResponse.model_validate(cached)
-        resp.query = req.query
-        resp.cached = True
-        resp.took_ms = int((time.monotonic() - t0) * 1000)
-        return resp
-    with state.pool.connection() as conn:
+    if state.cache is not None:
+        cached = state.cache.get(qvec, scope)
+        metrics.API_CACHE_EVENTS.labels("hit" if cached is not None else "miss").inc()
+        if cached is not None:
+            resp = SearchResponse.model_validate(cached)
+            resp.query = req.query
+            resp.cached = True
+            return _finish(resp, t0)
+    with state.pool.connection() as conn, metrics.API_DB_SEARCH_SECONDS.time():
         hits = db.search(conn, qvec, k=req.k, categories=req.categories, since=req.since)
     resp = SearchResponse(
         query=req.query,
@@ -130,6 +135,15 @@ def run_search(req: SearchRequest) -> SearchResponse:
     )
     if state.cache is not None:
         state.cache.put(req.query, qvec, scope, resp.model_dump(mode="json"))
+    return _finish(resp, t0)
+
+
+def _finish(resp: SearchResponse, t0: float) -> SearchResponse:
+    took = time.monotonic() - t0
+    resp.took_ms = int(took * 1000)
+    cached = "true" if resp.cached else "false"
+    metrics.API_SEARCH_SECONDS.labels(cached).observe(took)
+    metrics.API_SEARCH.labels(cached).inc()
     return resp
 
 
@@ -199,6 +213,11 @@ def health() -> dict:
     with state.pool.connection() as conn:
         conn.execute("SELECT 1").fetchone()
     return {"ok": True}
+
+
+@app.get("/metrics", include_in_schema=False)
+def prometheus_metrics() -> Response:
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 def run() -> None:

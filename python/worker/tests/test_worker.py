@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
+from prometheus_client import REGISTRY
 
 from arxiv_common import schema
 from arxiv_common.models import Paper
@@ -41,6 +42,10 @@ def sample_paper_json() -> bytes:
     )
 
 
+def sample(name: str, **labels: str) -> float:
+    return REGISTRY.get_sample_value(name, labels) or 0.0
+
+
 @pytest.fixture
 def worker():
     with (
@@ -54,6 +59,7 @@ def worker():
 
         w.settings = Settings()
         w.topic = "papers.new"
+        w.group = "test"
         w.summary_enabled = False
         w.producer = producer.return_value
         w.inference = MagicMock()
@@ -79,15 +85,20 @@ def test_parse_rejects_bad_json_and_schema(worker):
 
 
 def test_poison_goes_to_dlq_without_retry(worker):
+    poison_before = sample("worker_dead_letters_total", group="test", reason="poison")
     worker.handle(FakeMessage(b"{not json", key=b"bad"))
     assert worker.failed == 1
     worker.producer.produce.assert_called_once()
     _, kwargs = worker.producer.produce.call_args
     failed = schema.loads("failed", kwargs["value"])
     assert failed["stage"] == "worker" and failed["attempts"] == 1 and failed["arxiv_id"] == "bad"
+    assert sample("worker_dead_letters_total", group="test", reason="poison") == poison_before + 1
+    assert sample("worker_attempts_total", group="test") == 0
 
 
 def test_success_path_calls_embed_and_upsert(worker):
+    stored_before = sample("worker_messages_total", group="test", result="stored")
+    chunks_before = sample("worker_chunks_total", group="test")
     worker.inference.embed.return_value = [[0.1] * 1024]
     with patch("arxiv_worker.main.db.upsert_paper") as upsert:
         worker.handle(FakeMessage(sample_paper_json()))
@@ -96,13 +107,20 @@ def test_success_path_calls_embed_and_upsert(worker):
     upsert.assert_called_once()
     doc = upsert.call_args.args[1]
     assert doc.paper.arxiv_id == "2609.01234"
+    assert sample("worker_messages_total", group="test", result="stored") == stored_before + 1
+    assert sample("worker_chunks_total", group="test") == chunks_before + 1
+    assert sample("worker_process_seconds_count", group="test") >= 1
 
 
 def test_persistent_failure_dead_letters_after_retries(worker):
     from arxiv_common.inference import InferenceError
 
+    attempts_before = sample("worker_attempts_total", group="test")
+    dlq_before = sample("worker_dead_letters_total", group="test", reason="retries_exhausted")
     worker.inference.embed.side_effect = InferenceError("embeddings 400: bad")
     with patch("arxiv_worker.main.time.sleep"):
         worker.handle(FakeMessage(sample_paper_json()))
     assert worker.processed == 0 and worker.failed == 1
     assert worker.inference.embed.call_count == 3
+    assert sample("worker_attempts_total", group="test") == attempts_before + 3
+    assert sample("worker_dead_letters_total", group="test", reason="retries_exhausted") == dlq_before + 1
