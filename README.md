@@ -63,9 +63,10 @@ native consumer-lag metrics are enabled by `dev.sh`. Structured logs (`tracing`,
 id as the correlation key across stages; Redpanda Console (`:8080`) shows topics, groups and the DLQ.
 
 ## Measured (see BENCHMARKS.md and STATUS.md)
-- Search: cold `POST /search` ~105 ms end to end (≈50 ms query embedding + SQL), semantic-cache hit ~34 ms;
-  ~77 req/s sustained at 8 and 32 concurrent clients with 0 errors (the ceiling is Ollama's embedding
-  throughput on the laptop, not the API or Postgres).
+- Search: cold `POST /search` p50 74 ms end to end (≈43 ms query embedding + 29 ms SQL), semantic-cache
+  hit 34 ms; ~83 req/s sustained at 8 and 32 concurrent clients with 0 errors (the ceiling is Ollama's
+  embedding throughput on the laptop, not the API or Postgres). Disabling psycopg's server-side prepared
+  statements halved the SQL time (60 → 29 ms unfiltered, 24 → 15 ms filtered).
 - Retrieval: title → own paper recall@1 = 1.000 (n = 500); first abstract sentence → own paper
   recall@1 = 0.795, recall@10 = 0.945 (n = 200); category precision@5 = 0.987 over 15 natural-language
   queries. Self-retrieval is a sanity metric, not a relevance benchmark.

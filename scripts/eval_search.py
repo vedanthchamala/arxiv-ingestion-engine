@@ -19,6 +19,10 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+import psycopg
+from pgvector.psycopg import register_vector
+from psycopg.rows import dict_row
+
 from arxiv_common import db
 from arxiv_common.config import Settings
 from arxiv_common.inference import InferenceClient
@@ -127,7 +131,8 @@ def main() -> None:
 
     settings = Settings(embedding_url=args.embedding_url, embedding_model=args.embedding_model)
     client = InferenceClient(settings, timeout_s=120)
-    conn = db.connect(args.database_url)
+    conn = psycopg.connect(args.database_url, row_factory=dict_row, prepare_threshold=None)
+    register_vector(conn)
     started = datetime.now(UTC)
 
     papers = conn.execute(
