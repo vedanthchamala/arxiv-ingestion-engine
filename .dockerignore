@@ -1,0 +1,13 @@
+# Build context is the repo root for rust/Dockerfile and python/Dockerfile.
+.git
+.env
+.DS_Store
+rust/target
+python/.venv
+data
+models
+**/__pycache__
+**/*.pyc
+**/*.egg-info
+**/.pytest_cache
+**/.ruff_cache

@@ -1,5 +1,33 @@
 name: arxiv
 
+# ---- `pipeline` profile: the five pipeline services in containers ------------------------------
+# `docker compose up -d` (no profile) starts only the infra below; `docker compose --profile
+# pipeline up -d` adds poller, fetcher, worker-abstract, worker and api. Both Dockerfiles build
+# from the repo root so they can reach schemas/.
+x-pipeline: &pipeline
+  profiles: ["pipeline"]
+  restart: unless-stopped
+  extra_hosts:
+    - "host.docker.internal:host-gateway"   # Linux hosts; Docker Desktop provides the name anyway
+
+x-pipeline-env: &pipeline-env
+  KAFKA_BROKERS: redpanda:9092
+  REDIS_URL: redis://redis:6379
+  DATABASE_URL: postgresql://arxiv:arxiv@postgres:5432/arxiv
+  TOPIC_PAPERS_NEW: ${TOPIC_PAPERS_NEW:-papers.new}
+  TOPIC_PAPERS_CHUNKED: ${TOPIC_PAPERS_CHUNKED:-papers.chunked}
+  TOPIC_PAPERS_FAILED: ${TOPIC_PAPERS_FAILED:-papers.failed}
+  RUST_LOG: ${RUST_LOG:-info}
+
+# Ollama on the host by default; override EMBEDDING_URL / LLM_URL in .env for the Spark. Inside a
+# container `localhost` is the container itself, so a host Ollama must be host.docker.internal.
+x-inference-env: &inference-env
+  EMBEDDING_URL: ${EMBEDDING_URL:-http://host.docker.internal:11434/v1}
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL:-bge-m3}
+  LLM_URL: ${LLM_URL:-http://host.docker.internal:11434/v1}
+  LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b-instruct}
+  SUMMARY_ENABLED: ${SUMMARY_ENABLED:-true}
+
 services:
   redpanda:
     image: docker.redpanda.com/redpandadata/redpanda:v26.2.2
@@ -77,7 +105,123 @@ services:
       timeout: 3s
       retries: 20
 
+  # ---- pipeline profile --------------------------------------------------------------------------
+  poller:
+    <<: *pipeline
+    image: arxiv-poller
+    build:
+      context: .
+      dockerfile: rust/Dockerfile
+      target: poller
+    # No command = the default loop (one cycle every ARXIV_POLL_INTERVAL_SECS). One cycle only:
+    #   docker compose --profile pipeline run --rm poller --once
+    environment:
+      <<: *pipeline-env
+      METRICS_PORT: "9101"
+      ARXIV_CATEGORIES: ${ARXIV_CATEGORIES:-cs.LG,cs.CV,cs.RO}
+      ARXIV_POLL_INTERVAL_SECS: ${ARXIV_POLL_INTERVAL_SECS:-900}
+      ARXIV_PAGE_SIZE: ${ARXIV_PAGE_SIZE:-200}
+      ARXIV_MAX_PAGES: ${ARXIV_MAX_PAGES:-10}
+      ARXIV_MIN_REQUEST_INTERVAL_SECS: ${ARXIV_MIN_REQUEST_INTERVAL_SECS:-3}
+      ARXIV_USER_AGENT: ${ARXIV_USER_AGENT:-arxiv-ingest/0.1}
+    ports:
+      - "9101:9101"
+    stop_signal: SIGINT      # the Rust binaries shut down on ctrl-c, not SIGTERM
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  fetcher:
+    <<: *pipeline
+    image: arxiv-fetcher
+    build:
+      context: .
+      dockerfile: rust/Dockerfile
+      target: fetcher
+    # Exactly one fetcher, always: it owns every request to arxiv.org (1 request / 3 s across all
+    # machines, arXiv terms of use; DECISIONS.md 2). Never `--scale fetcher=N`, and do not run it
+    # alongside scripts/pipeline.sh fetcher or scripts/backfill.py.
+    deploy:
+      replicas: 1
+    environment:
+      <<: *pipeline-env
+      METRICS_PORT: "9102"
+      ARXIV_MIN_REQUEST_INTERVAL_SECS: ${ARXIV_MIN_REQUEST_INTERVAL_SECS:-3}
+      ARXIV_USER_AGENT: ${ARXIV_USER_AGENT:-arxiv-ingest/0.1}
+      TOKENIZER_MODEL: ${TOKENIZER_MODEL:-BAAI/bge-m3}
+    volumes:
+      - hf:/hf                 # bge-m3 tokenizer cache (HF_HOME), downloaded on first run
+    ports:
+      - "9102:9102"
+    stop_signal: SIGINT
+    stop_grace_period: 2m    # let an in-flight paper (retries, pdftotext) finish and commit
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      redis:                 # shared arxiv.org request budget (arxiv:ratelimit)
+        condition: service_healthy
+
+  worker-abstract:
+    <<: *pipeline
+    image: arxiv-worker
+    build:
+      context: .
+      dockerfile: python/Dockerfile
+      target: worker
+    command: ["--topic", "${TOPIC_PAPERS_NEW:-papers.new}", "--group", "worker-abstract", "--no-summary"]
+    environment:
+      <<: [*pipeline-env, *inference-env]
+      METRICS_PORT: "9104"
+    ports:
+      - "9104:9104"
+    stop_grace_period: 2m
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  worker:
+    <<: *pipeline
+    image: arxiv-worker
+    build:
+      context: .
+      dockerfile: python/Dockerfile
+      target: worker
+    command: ["--topic", "${TOPIC_PAPERS_CHUNKED:-papers.chunked}", "--group", "worker"]
+    environment:
+      <<: [*pipeline-env, *inference-env]
+      METRICS_PORT: "9103"
+    ports:
+      - "9103:9103"
+    stop_grace_period: 2m
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *pipeline
+    image: arxiv-api
+    build:
+      context: .
+      dockerfile: python/Dockerfile
+      target: api
+    environment:
+      <<: [*pipeline-env, *inference-env]
+    ports:
+      - "${API_PORT:-8000}:8000"   # host port is overridable: API_PORT=8001 in .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
 volumes:
   redpanda:
   postgres:
   redis:
+  hf:                      # fetcher's tokenizer cache (pipeline profile)
