@@ -3,39 +3,37 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use common::ratelimit::MinInterval;
+use common::ratelimit::Limiter;
+use common::telemetry::{record_arxiv_request, record_ratelimit_wait};
 use reqwest::StatusCode;
 use tracing::{debug, warn};
 
+const PROCESS: &str = "fetcher";
+
 pub struct Fetcher {
     http: reqwest::Client,
-    limiter: MinInterval,
+    limiter: Limiter,
     max_pdf_bytes: usize,
 }
 
 impl Fetcher {
-    pub fn new(user_agent: &str, min_interval: Duration, max_pdf_bytes: usize) -> Result<Self> {
+    pub fn new(user_agent: &str, limiter: Limiter, max_pdf_bytes: usize) -> Result<Self> {
         let http = reqwest::Client::builder()
             .user_agent(user_agent)
             .timeout(Duration::from_secs(120))
             .build()?;
         Ok(Self {
             http,
-            limiter: MinInterval::new(min_interval),
+            limiter,
             max_pdf_bytes,
         })
     }
 
     /// `Ok(None)` when arXiv has no HTML rendering for this version.
     pub async fn html(&self, url: &str) -> Result<Option<String>> {
-        self.limiter.wait().await;
-        debug!(url, "GET html");
-        let resp = self.http.get(url).send().await.context("html request")?;
-        match resp.status() {
-            StatusCode::OK => {}
-            StatusCode::NOT_FOUND => return Ok(None),
-            s => bail!("html {url}: HTTP {s}"),
-        }
+        let Some(resp) = self.get("html", url).await? else {
+            return Ok(None);
+        };
         let body = resp.text().await.context("html body")?;
         if !body.contains("ltx_document") {
             warn!(url, "200 but not a LaTeXML page");
@@ -46,14 +44,9 @@ impl Fetcher {
 
     /// `Ok(None)` when the PDF is missing or larger than the configured cap.
     pub async fn pdf(&self, url: &str) -> Result<Option<Vec<u8>>> {
-        self.limiter.wait().await;
-        debug!(url, "GET pdf");
-        let resp = self.http.get(url).send().await.context("pdf request")?;
-        match resp.status() {
-            StatusCode::OK => {}
-            StatusCode::NOT_FOUND => return Ok(None),
-            s => bail!("pdf {url}: HTTP {s}"),
-        }
+        let Some(resp) = self.get("pdf", url).await? else {
+            return Ok(None);
+        };
         if let Some(len) = resp.content_length()
             && len as usize > self.max_pdf_bytes
         {
@@ -69,5 +62,33 @@ impl Fetcher {
             bail!("pdf {url}: body is not a PDF");
         }
         Ok(Some(bytes.to_vec()))
+    }
+
+    /// Waits for a send slot, issues the GET and records the outcome. `Ok(None)` on 404.
+    async fn get(&self, kind: &'static str, url: &str) -> Result<Option<reqwest::Response>> {
+        let waited = self.limiter.wait().await;
+        record_ratelimit_wait(PROCESS, waited);
+        debug!(kind, url, wait_ms = waited.as_millis() as u64, "arxiv request");
+        let resp = match self.http.get(url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                record_arxiv_request(PROCESS, kind, "error");
+                return Err(e).with_context(|| format!("{kind} request"));
+            }
+        };
+        match resp.status() {
+            StatusCode::OK => {
+                record_arxiv_request(PROCESS, kind, "ok");
+                Ok(Some(resp))
+            }
+            StatusCode::NOT_FOUND => {
+                record_arxiv_request(PROCESS, kind, "not_found");
+                Ok(None)
+            }
+            s => {
+                record_arxiv_request(PROCESS, kind, "error");
+                bail!("{kind} {url}: HTTP {s}")
+            }
+        }
     }
 }

@@ -11,9 +11,11 @@ use chunk::Chunker;
 use clap::Parser;
 use common::kafka;
 use common::models::{ChunkedPaper, Failed, Paper, SCHEMA_VERSION, Stage, TextSource};
+use common::ratelimit::Limiter;
 use common::schema::{Validators, validate_and_serialize};
 use fetch::Fetcher;
 use html::Section;
+use metrics::{Unit, counter, describe_counter, describe_histogram, histogram};
 use rdkafka::Message;
 use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
 use rdkafka::message::BorrowedMessage;
@@ -39,6 +41,17 @@ struct Args {
     user_agent: String,
     #[arg(long, env = "ARXIV_MIN_REQUEST_INTERVAL_SECS", default_value_t = 3)]
     min_request_interval_secs: u64,
+    #[arg(long, env = "REDIS_URL", default_value = "redis://localhost:6379")]
+    redis_url: String,
+    /// Redis key of the request budget shared with the poller and backfill script.
+    #[arg(long, env = "ARXIV_RATELIMIT_KEY", default_value = common::ratelimit::DEFAULT_KEY)]
+    ratelimit_key: String,
+    /// Space requests in-process only instead of through the shared Redis budget (tests/offline).
+    #[arg(long)]
+    local_ratelimit: bool,
+    /// Prometheus `/metrics` port; 0 disables the exporter.
+    #[arg(long, env = "METRICS_PORT", default_value_t = 9102)]
+    metrics_port: u16,
     /// Hugging Face id of the embedding model whose tokenizer sizes the chunks.
     #[arg(long, env = "TOKENIZER_MODEL", default_value = "BAAI/bge-m3")]
     tokenizer: String,
@@ -90,14 +103,23 @@ const MAX_ATTEMPTS: u32 = 3;
 async fn main() -> Result<()> {
     common::telemetry::init();
     let args = Args::parse();
+    if let Err(e) = common::telemetry::init_metrics(args.metrics_port) {
+        warn!(error = %e, "metrics exporter not started; continuing without it");
+    }
+    describe_metrics();
     pdf::ensure_pdftotext().await?;
     info!(tokenizer = %args.tokenizer, "loading tokenizer (downloads on first run)");
     let chunker = Chunker::from_pretrained(&args.tokenizer, args.chunk_tokens, args.chunk_overlap, args.max_chunks)?;
-    let fetcher = Fetcher::new(
-        &args.user_agent,
-        Duration::from_secs(args.min_request_interval_secs),
-        args.max_pdf_mb * 1024 * 1024,
-    )?;
+    let min_interval = Duration::from_secs(args.min_request_interval_secs);
+    let limiter = if args.local_ratelimit {
+        Limiter::local(min_interval)
+    } else {
+        Limiter::shared(&args.redis_url, &args.ratelimit_key, min_interval)
+            .await
+            .context("shared rate limiter (pass --local-ratelimit to run without Redis)")?
+    };
+    info!(limiter = limiter.kind(), key = %args.ratelimit_key, interval_secs = args.min_request_interval_secs, "arxiv request budget");
+    let fetcher = Fetcher::new(&args.user_agent, limiter, args.max_pdf_mb * 1024 * 1024)?;
     let consumer = kafka::consumer(&args.brokers, &args.group)?;
     consumer.subscribe(&[args.topic_in.as_str()]).context("subscribe")?;
     let producer = kafka::producer(&args.brokers)?;
@@ -161,6 +183,7 @@ async fn handle(ctx: &Ctx, msg: &BorrowedMessage<'_>, stats: &mut Stats) {
         Ok(p) => p,
         Err(e) => {
             stats.failed += 1;
+            counter!("fetcher_papers_total", "result" => "failed").increment(1);
             dead_letter(ctx, &key, payload, &format!("unparseable message: {e}"), 1).await;
             return;
         }
@@ -168,6 +191,7 @@ async fn handle(ctx: &Ctx, msg: &BorrowedMessage<'_>, stats: &mut Stats) {
     let started = Instant::now();
     let mut last_err = String::new();
     for attempt in 1..=MAX_ATTEMPTS {
+        counter!("fetcher_attempts_total").increment(1);
         match process(ctx, &paper).await {
             Ok((source, n_chunks)) => {
                 match source {
@@ -175,6 +199,10 @@ async fn handle(ctx: &Ctx, msg: &BorrowedMessage<'_>, stats: &mut Stats) {
                     TextSource::Pdf => stats.pdf += 1,
                     TextSource::Abstract => stats.abstract_only += 1,
                 }
+                counter!("fetcher_papers_total", "result" => source.as_str()).increment(1);
+                counter!("fetcher_chunks_total").increment(n_chunks as u64);
+                histogram!("fetcher_process_seconds", "result" => source.as_str())
+                    .record(started.elapsed().as_secs_f64());
                 info!(id = %paper.versioned_id(), ?source, chunks = n_chunks, attempt, ms = started.elapsed().as_millis() as u64, "chunked");
                 return;
             }
@@ -188,7 +216,26 @@ async fn handle(ctx: &Ctx, msg: &BorrowedMessage<'_>, stats: &mut Stats) {
         }
     }
     stats.failed += 1;
+    counter!("fetcher_papers_total", "result" => "failed").increment(1);
+    histogram!("fetcher_process_seconds", "result" => "failed").record(started.elapsed().as_secs_f64());
     dead_letter(ctx, &key, payload, &last_err, MAX_ATTEMPTS).await;
+}
+
+fn describe_metrics() {
+    describe_counter!(
+        "fetcher_papers_total",
+        "Papers finished, by result (html|pdf|abstract|failed)"
+    );
+    describe_counter!("fetcher_chunks_total", "Chunks produced to papers.chunked");
+    describe_histogram!(
+        "fetcher_process_seconds",
+        Unit::Seconds,
+        "Time from first attempt to result, by result"
+    );
+    describe_counter!(
+        "fetcher_attempts_total",
+        "Processing attempts, one per try (up to 3 per paper)"
+    );
 }
 
 async fn process(ctx: &Ctx, paper: &Paper) -> Result<(TextSource, usize)> {

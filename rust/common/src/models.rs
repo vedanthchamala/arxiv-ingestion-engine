@@ -61,6 +61,17 @@ pub enum TextSource {
     Abstract,
 }
 
+impl TextSource {
+    /// Wire form, also used as the `result` metric label.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Html => "html",
+            Self::Pdf => "pdf",
+            Self::Abstract => "abstract",
+        }
+    }
+}
+
 /// Topic `papers.chunked`. The original message plus extracted, chunked full text.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChunkedPaper {

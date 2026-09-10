@@ -6,7 +6,9 @@ use anyhow::{Context, Result};
 use arxiv::ArxivClient;
 use clap::Parser;
 use common::kafka;
+use common::ratelimit::Limiter;
 use common::schema::{Validators, validate_and_serialize};
+use metrics::{Unit, counter, describe_counter, describe_gauge, describe_histogram, gauge, histogram};
 use rdkafka::producer::FutureProducer;
 use redis::AsyncCommands;
 use tokio::time::sleep;
@@ -42,6 +44,15 @@ struct Args {
     min_request_interval_secs: u64,
     #[arg(long, env = "ARXIV_USER_AGENT", default_value = "arxiv-ingest/0.1")]
     user_agent: String,
+    /// Redis key of the request budget shared with the fetcher and backfill script.
+    #[arg(long, env = "ARXIV_RATELIMIT_KEY", default_value = common::ratelimit::DEFAULT_KEY)]
+    ratelimit_key: String,
+    /// Space requests in-process only instead of through the shared Redis budget (tests/offline).
+    #[arg(long)]
+    local_ratelimit: bool,
+    /// Prometheus `/metrics` port; 0 disables the exporter.
+    #[arg(long, env = "METRICS_PORT", default_value_t = 9101)]
+    metrics_port: u16,
     /// Run one cycle and exit.
     #[arg(long)]
     once: bool,
@@ -73,7 +84,21 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     info!(?args.categories, interval_secs = args.interval_secs, once = args.once, dry_run = args.dry_run, "poller starting");
 
-    let arxiv = ArxivClient::new(&args.user_agent, Duration::from_secs(args.min_request_interval_secs))?;
+    if let Err(e) = common::telemetry::init_metrics(args.metrics_port) {
+        warn!(error = %e, "metrics exporter not started; continuing without it");
+    }
+    describe_metrics();
+
+    let min_interval = Duration::from_secs(args.min_request_interval_secs);
+    let limiter = if args.local_ratelimit {
+        Limiter::local(min_interval)
+    } else {
+        Limiter::shared(&args.redis_url, &args.ratelimit_key, min_interval)
+            .await
+            .context("shared rate limiter (pass --local-ratelimit to run without Redis)")?
+    };
+    info!(limiter = limiter.kind(), key = %args.ratelimit_key, interval_secs = args.min_request_interval_secs, "arxiv request budget");
+    let arxiv = ArxivClient::new(&args.user_agent, limiter)?;
     let producer = kafka::producer(&args.brokers)?;
     let redis = redis::Client::open(args.redis_url.as_str())
         .context("redis url")?
@@ -105,6 +130,14 @@ async fn main() -> Result<()> {
                         invalid = s.invalid,
                         "category done"
                     );
+                    for (result, n) in [
+                        ("produced", s.produced),
+                        ("seen", s.skipped_seen),
+                        ("invalid", s.invalid),
+                    ] {
+                        counter!("poller_papers_total", "category" => category.clone(), "result" => result)
+                            .increment(n as u64);
+                    }
                     total.pages += s.pages;
                     total.fetched += s.fetched;
                     total.produced += s.produced;
@@ -121,6 +154,9 @@ async fn main() -> Result<()> {
             elapsed_s = started.elapsed().as_secs(),
             "cycle done"
         );
+        counter!("poller_cycles_total").increment(1);
+        histogram!("poller_cycle_seconds").record(started.elapsed().as_secs_f64());
+        gauge!("poller_last_cycle_timestamp_seconds").set(chrono::Utc::now().timestamp() as f64);
 
         if ctx.args.once {
             break;
@@ -131,6 +167,24 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn describe_metrics() {
+    describe_counter!("poller_cycles_total", "Completed poll cycles");
+    describe_histogram!(
+        "poller_cycle_seconds",
+        Unit::Seconds,
+        "Wall time of one poll cycle over all categories"
+    );
+    describe_counter!(
+        "poller_papers_total",
+        "Papers per category and result (produced|seen|invalid)"
+    );
+    describe_gauge!(
+        "poller_last_cycle_timestamp_seconds",
+        Unit::Seconds,
+        "Unix time the last cycle finished"
+    );
 }
 
 /// Walks a category newest-first and stops at the first page that yields nothing new.

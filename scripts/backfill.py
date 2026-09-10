@@ -7,7 +7,8 @@ Harvests set `cs` with metadataPrefix `arXiv`, keeps records whose categories in
 ARXIV_CATEGORIES, emits schema-valid PaperV1 messages keyed by arxiv_id, and marks them in the
 Redis seen-set. OAI-PMH records carry no version number, so backfilled papers are version 1 with
 unversioned URLs; the poller re-emits them as vN if a newer version is announced later.
-Respects the global 3 s spacing (do not run alongside the fetcher).
+Draws on the arXiv request budget shared with the poller and fetcher (schemas/ratelimit.lua in
+Redis), so it may run alongside them; --local-ratelimit keeps the 3 s spacing in-process instead.
 """
 
 import argparse
@@ -27,9 +28,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python" / "arxiv_c
 from arxiv_common import schema  # noqa: E402
 from arxiv_common.config import Settings  # noqa: E402
 from arxiv_common.models import Paper  # noqa: E402
+from arxiv_common.ratelimit import DEFAULT_KEY, LocalMinInterval, SharedMinInterval  # noqa: E402
 
 OAI = "https://oaipmh.arxiv.org/oai"
-NS = {"oai": "http://www.openarchives.org/OAI/2.0/", "ax": "http://arxiv.org/OAI/arXiv/"}
+NS = {
+    "oai": "http://www.openarchives.org/OAI/2.0/",
+    "ax": "http://arxiv.org/OAI/arXiv/",
+}
 MIN_INTERVAL = float(os.environ.get("ARXIV_MIN_REQUEST_INTERVAL_SECS", "3"))
 
 
@@ -83,6 +88,11 @@ def main() -> None:
     ap.add_argument("--set", default="cs")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--max-pages", type=int, default=None)
+    ap.add_argument(
+        "--local-ratelimit",
+        action="store_true",
+        help="space requests in-process instead of via the Redis budget",
+    )
     args = ap.parse_args()
 
     settings = Settings()
@@ -93,20 +103,28 @@ def main() -> None:
     r = None if args.dry_run else redis.Redis.from_url(settings.redis_url)
     seen_key = os.environ.get("REDIS_SEEN_KEY", "arxiv:seen")
     ua = os.environ.get("ARXIV_USER_AGENT", "arxiv-ingest/0.1")
+    if args.local_ratelimit:
+        limiter = LocalMinInterval(MIN_INTERVAL)
+    else:
+        rl_client = r if r is not None else redis.Redis.from_url(settings.redis_url)
+        limiter = SharedMinInterval(
+            rl_client, MIN_INTERVAL, os.environ.get("ARXIV_RATELIMIT_KEY", DEFAULT_KEY)
+        )
 
-    params = {"verb": "ListRecords", "metadataPrefix": "arXiv", "set": args.set, "from": args.from_}
+    params = {
+        "verb": "ListRecords",
+        "metadataPrefix": "arXiv",
+        "set": args.set,
+        "from": args.from_,
+    }
     if args.until:
         params["until"] = args.until
     stats = {"pages": 0, "records": 0, "matched": 0, "produced": 0, "seen": 0}
-    last_req = 0.0
     with httpx.Client(timeout=120, headers={"User-Agent": ua}) as http:
         while True:
-            wait = MIN_INTERVAL - (time.monotonic() - last_req)
-            if wait > 0:
-                time.sleep(wait)
             for attempt in range(1, 5):
+                limiter.wait()
                 resp = http.get(OAI, params=params)
-                last_req = time.monotonic()
                 if resp.status_code == 503:
                     delay = int(resp.headers.get("Retry-After", "20"))
                     print(f"503 retry-after {delay}s (attempt {attempt})", file=sys.stderr)

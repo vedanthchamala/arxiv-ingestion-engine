@@ -3,17 +3,19 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 use common::models::{Paper, SCHEMA_VERSION};
-use common::ratelimit::MinInterval;
+use common::ratelimit::Limiter;
+use common::telemetry::{record_arxiv_request, record_ratelimit_wait};
 use roxmltree::{Document, Node};
 use tracing::{debug, warn};
 
 const ATOM: &str = "http://www.w3.org/2005/Atom";
 const ARXIV: &str = "http://arxiv.org/schemas/atom";
 const OPENSEARCH: &str = "http://a9.com/-/spec/opensearch/1.1/";
+const PROCESS: &str = "poller";
 
 pub struct ArxivClient {
     http: reqwest::Client,
-    limiter: MinInterval,
+    limiter: Limiter,
     base_url: String,
 }
 
@@ -24,24 +26,32 @@ pub struct Page {
 }
 
 impl ArxivClient {
-    pub fn new(user_agent: &str, min_interval: Duration) -> Result<Self> {
+    pub fn new(user_agent: &str, limiter: Limiter) -> Result<Self> {
         let http = reqwest::Client::builder()
             .user_agent(user_agent)
             .timeout(Duration::from_secs(60))
             .build()?;
         Ok(Self {
             http,
-            limiter: MinInterval::new(min_interval),
+            limiter,
             base_url: "https://export.arxiv.org/api/query".to_string(),
         })
     }
 
     /// One page of a category, newest-updated first. Honors the global request spacing.
     pub async fn category_page(&self, category: &str, start: usize, max_results: usize) -> Result<Page> {
-        self.limiter.wait().await;
+        let waited = self.limiter.wait().await;
+        record_ratelimit_wait(PROCESS, waited);
         let query = format!("cat:{category}");
-        debug!(category, start, max_results, "arxiv query");
-        let resp = self
+        debug!(
+            kind = "api",
+            category,
+            start,
+            max_results,
+            wait_ms = waited.as_millis() as u64,
+            "arxiv request"
+        );
+        let sent = self
             .http
             .get(&self.base_url)
             .query(&[
@@ -53,9 +63,15 @@ impl ArxivClient {
             ])
             .send()
             .await
-            .context("arxiv request")?
-            .error_for_status()
-            .context("arxiv status")?;
+            .and_then(|r| r.error_for_status());
+        let resp = match sent {
+            Ok(r) => r,
+            Err(e) => {
+                record_arxiv_request(PROCESS, "api", "error");
+                return Err(e).context("arxiv request");
+            }
+        };
+        record_arxiv_request(PROCESS, "api", "ok");
         let body = resp.text().await.context("arxiv body")?;
         parse_feed(&body, Utc::now())
     }
