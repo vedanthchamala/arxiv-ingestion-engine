@@ -1,0 +1,29 @@
+# Prometheus runs inside docker compose (profile `observability`). Pipeline stages are reached via
+# host.docker.internal whether they run on the host (scripts/pipeline.sh) or as containers that
+# publish their metrics port (profile `pipeline`); Redpanda is reached by its compose hostname.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: poller
+    static_configs:
+      - targets: ["host.docker.internal:9101"]
+
+  - job_name: fetcher
+    static_configs:
+      - targets: ["host.docker.internal:9102"]
+
+  - job_name: worker
+    static_configs:
+      - targets: ["host.docker.internal:9103", "host.docker.internal:9104"]
+
+  - job_name: api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:8000"]
+
+  - job_name: redpanda
+    metrics_path: /public_metrics
+    static_configs:
+      - targets: ["redpanda:9644"]

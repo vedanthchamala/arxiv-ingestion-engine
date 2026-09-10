@@ -14,6 +14,9 @@ for t in papers.new papers.chunked papers.failed; do
   fi
 done
 
+echo "--- consumer-lag metrics"
+docker compose exec -T redpanda rpk cluster config set enable_consumer_group_metrics '["group","partition","consumer_lag"]' >/dev/null && echo "enabled"
+
 echo "--- migrations"
 for f in sql/*.sql; do
   docker compose exec -T postgres psql -q -v ON_ERROR_STOP=1 -U arxiv -d arxiv -f "/docker-entrypoint-initdb.d/$(basename "$f")"
@@ -25,3 +28,4 @@ echo "console   http://localhost:8080"
 echo "kafka     localhost:19092"
 echo "postgres  postgresql://arxiv:arxiv@localhost:5432/arxiv"
 echo "redis     redis://localhost:6379"
+echo "metrics   docker compose --profile observability up -d   # Prometheus :9090, Grafana :3000"
