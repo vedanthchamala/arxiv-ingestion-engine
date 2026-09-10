@@ -32,7 +32,7 @@ API_DB_SEARCH_SECONDS = Histogram("api_db_search_seconds", "pgvector search time
 
 def init_worker_labels(group: str) -> None:
     """Expose every fixed label combination at 0 so rates and stat panels work before the first event."""
-    for result in ("stored", "failed"):
+    for result in ("stored", "skipped", "failed"):
         WORKER_MESSAGES.labels(group, result)
     for reason in ("poison", "retries_exhausted", "db_unavailable"):
         WORKER_DEAD_LETTERS.labels(group, reason)

@@ -18,20 +18,33 @@ def connect(database_url: str) -> psycopg.Connection:
     return conn
 
 
+def has_full_text(conn: psycopg.Connection, arxiv_id: str, version: int) -> bool:
+    """True when the stored row already carries full text for this version or a newer one."""
+    row = conn.execute(
+        "SELECT 1 FROM papers WHERE arxiv_id = %s AND source IN ('html', 'pdf') AND version >= %s",
+        (arxiv_id, version),
+    ).fetchone()
+    return row is not None
+
+
 def upsert_paper(
     conn: psycopg.Connection,
     doc: ChunkedPaper,
     embeddings: Sequence[Sequence[float]],
     summary: str | None,
     summary_model: str | None,
-) -> None:
-    """Idempotent: re-running for the same arxiv_id (any version) converges to the same rows."""
+) -> bool:
+    """Idempotent: re-running for the same arxiv_id (any version) converges to the same rows.
+
+    Returns False, writing nothing, when an abstract-only document meets a row that already has
+    full text for the same or a newer version: the fast path never downgrades the slow path's work,
+    whatever order the two consumers happen to run in."""
     if len(embeddings) != len(doc.chunks):
         raise ValueError(f"{len(embeddings)} embeddings for {len(doc.chunks)} chunks")
     p = doc.paper
     now = datetime.now(UTC)
     with conn.transaction():
-        conn.execute(
+        written = conn.execute(
             """
             INSERT INTO papers (arxiv_id, version, title, abstract, primary_category, categories,
                                 published_at, updated_at, pdf_url, html_url, doi, journal_ref, comment,
@@ -48,6 +61,10 @@ def upsert_paper(
                 summary = COALESCE(EXCLUDED.summary, papers.summary),
                 summary_model = COALESCE(EXCLUDED.summary_model, papers.summary_model),
                 status = 'processed', processed_at = EXCLUDED.processed_at
+            WHERE NOT (EXCLUDED.source = 'abstract'
+                       AND papers.source IN ('html', 'pdf')
+                       AND papers.version >= EXCLUDED.version)
+            RETURNING arxiv_id
             """,
             {
                 "arxiv_id": p.arxiv_id,
@@ -68,7 +85,9 @@ def upsert_paper(
                 "summary_model": summary_model,
                 "now": now,
             },
-        )
+        ).fetchone()
+        if written is None:
+            return False
 
         conn.execute("DELETE FROM paper_authors WHERE arxiv_id = %s", (p.arxiv_id,))
         for position, name in enumerate(p.authors):
@@ -96,6 +115,7 @@ def upsert_paper(
                     for c, e in zip(doc.chunks, embeddings, strict=True)
                 ],
             )
+    return True
 
 
 @dataclass

@@ -52,8 +52,10 @@ def worker():
         patch("arxiv_worker.main.Consumer"),
         patch("arxiv_worker.main.Producer") as producer,
         patch("arxiv_worker.main.InferenceClient"),
-        patch("arxiv_worker.main.db"),
+        patch("arxiv_worker.main.db") as dbm,
     ):
+        dbm.has_full_text.return_value = False
+        dbm.upsert_paper.return_value = True
         w = Worker.__new__(Worker)
         from arxiv_common.config import Settings
 
@@ -124,3 +126,26 @@ def test_persistent_failure_dead_letters_after_retries(worker):
     assert worker.inference.embed.call_count == 3
     assert sample("worker_attempts_total", group="test") == attempts_before + 3
     assert sample("worker_dead_letters_total", group="test", reason="retries_exhausted") == dlq_before + 1
+
+
+def test_abstract_message_never_downgrades_full_text(worker):
+    with (
+        patch("arxiv_worker.main.db.has_full_text", return_value=True) as has_full,
+        patch("arxiv_worker.main.db.upsert_paper") as upsert,
+    ):
+        worker.handle(FakeMessage(sample_paper_json()))
+    has_full.assert_called_once_with(worker.conn, "2609.01234", 1)
+    worker.inference.embed.assert_not_called()
+    upsert.assert_not_called()
+    assert worker.processed == 1 and worker.failed == 0
+
+
+def test_guarded_upsert_result_is_reported_as_skipped(worker):
+    worker.inference.embed.return_value = [[0.1] * 1024]
+    with (
+        patch("arxiv_worker.main.db.has_full_text", return_value=False),
+        patch("arxiv_worker.main.db.upsert_paper", return_value=False) as upsert,
+    ):
+        worker.handle(FakeMessage(sample_paper_json()))
+    upsert.assert_called_once()
+    assert worker.processed == 1 and worker.failed == 0

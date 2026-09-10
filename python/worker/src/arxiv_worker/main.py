@@ -76,7 +76,9 @@ class Worker:
         except schema.SchemaError as e:
             raise Poison(str(e)) from e
 
-    def process(self, doc: ChunkedPaper) -> None:
+    def process(self, doc: ChunkedPaper) -> bool:
+        if doc.source == "abstract" and db.has_full_text(self.conn, doc.paper.arxiv_id, doc.paper.version):
+            return False
         with metrics.WORKER_EMBED_SECONDS.labels(self.group).time():
             embeddings = self.inference.embed([c.text for c in doc.chunks])
         summary = None
@@ -86,8 +88,10 @@ class Worker:
             with metrics.WORKER_SUMMARIZE_SECONDS.labels(self.group).time():
                 summary = self.inference.summarize(doc.paper.title, doc.paper.abstract, intro)
             model = self.settings.llm_model
-        db.upsert_paper(self.conn, doc, embeddings, summary, model)
+        if not db.upsert_paper(self.conn, doc, embeddings, summary, model):
+            return False
         metrics.WORKER_CHUNKS.labels(self.group).inc(len(doc.chunks))
+        return True
 
     def handle(self, msg: Message) -> None:
         with metrics.WORKER_PROCESS_SECONDS.labels(self.group).time():
@@ -105,10 +109,10 @@ class Worker:
         for attempt in range(1, MAX_ATTEMPTS + 1):
             metrics.WORKER_ATTEMPTS.labels(self.group).inc()
             try:
-                self.process(doc)
+                outcome = "stored" if self.process(doc) else "skipped"
                 self.processed += 1
-                metrics.WORKER_MESSAGES.labels(self.group, "stored").inc()
-                blog.info("stored", attempt=attempt, ms=int((time.monotonic() - started) * 1000))
+                metrics.WORKER_MESSAGES.labels(self.group, outcome).inc()
+                blog.info(outcome, attempt=attempt, ms=int((time.monotonic() - started) * 1000))
                 return
             except psycopg.OperationalError as e:
                 blog.warning("db connection lost; reconnecting", error=str(e), attempt=attempt)
