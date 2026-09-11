@@ -34,6 +34,7 @@ was made. "Superseded" entries are kept so the reasoning trail stays intact.
 | [27](#27-one-request-budget-in-redis-shared-by-every-arxiv-facing-process) | One arXiv request budget in Redis, shared by poller, fetcher and backfill | accepted (amends 2, 19, 22) |
 | [28](#28-prometheus-metrics-on-every-stage) | Prometheus metrics on every stage; Grafana dashboard | accepted (amends 25) |
 | [29](#29-containerized-pipeline-services) | Containerized pipeline services behind a compose profile | accepted (amends 24) |
+| [30](#30-the-fast-path-never-downgrades-full-text-and-reads-never-open-transactions) | The fast path never downgrades full text; reads never open transactions | accepted (amends 9, 14) |
 
 ---
 
@@ -289,3 +290,25 @@ fetcher is pinned to one replica (decision 2) and depends on Redis for the share
 `scripts/pipeline.sh` and `scripts/run.sh` keep working for host-side runs, so 24 is amended, not
 superseded. `.env` values written for the host (`localhost:11434`) are wrong inside a container:
 override them on the command line or point at the Spark.
+
+## 30. The fast path never downgrades full text, and reads never open transactions
+**Date** 2026-09-11 · **Context** The first time both consumers of `papers.new` ran together for
+real, the `worker-abstract` group started from the beginning of the topic (a legal at-least-once
+replay of 7,449 messages) and its abstract-only upsert would have replaced every row the
+full-text worker had already written: decision 14's two paths had only ever agreed by timing.
+The first fix, a pre-check `SELECT`, ran outside a transaction block on a non-autocommit psycopg
+connection; that opened an implicit transaction, every later `conn.transaction()` became a
+savepoint inside it, nothing committed, row locks accumulated, the full-text worker blocked on
+them past `max.poll.interval.ms`, Redpanda evicted both consumers, and each died on its next
+commit. **Decision** (a) An abstract document never replaces a row whose `source` is `html` or
+`pdf` for the same or a newer version: `db.has_full_text` skips before embedding and the upsert
+carries the same predicate in `ON CONFLICT … DO UPDATE … WHERE … RETURNING`, reporting the
+message as `skipped`. A newer version still replaces, and the fetcher replaces it again later.
+(b) Connections are opened with `autocommit=True` and a 120 s `lock_timeout`; every write is an
+explicit transaction block; a live test asserts a read leaves the connection `IDLE`. (c) Shared
+author rows are locked in `name_norm` order so two writers cannot deadlock. (d) A failed offset
+commit is logged and the message redelivered; it is not fatal. **Consequences** Either topic may
+be replayed in any order. Verified by killing the full-text worker with SIGKILL mid-message: the
+in-flight paper was redelivered and stored again, with no gap, duplicate or orphan in `chunks`
+and every count consistent (STATUS.md). The cost of the pre-check is one indexed `SELECT` per
+abstract message.

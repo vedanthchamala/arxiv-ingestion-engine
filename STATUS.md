@@ -16,12 +16,18 @@ Plan approved 2026-09-07. Last update: 2026-09-10.
 | 10. Containers | **done** 2026-09-10 | `rust/Dockerfile` + `python/Dockerfile`, compose `pipeline` profile (5 services); cold build 67 s, rebuild 9 s; images 236 MB (Rust) / 507 MB (Python); `--help`/import checks pass in-container |
 | 11. Evaluation + load test | **done** 2026-09-10 | `BENCHMARKS.md`: self-retrieval recall@1 1.000 (n=500), paraphrase recall@1 0.795 / recall@10 0.945 (n=200), precision@5 0.987 (15 queries); API cold p50 74 ms (105 before the prepared-statement fix), cache hit 34 ms, ~83 req/s at 8 and 32 clients with 0 errors; 15 API unit tests added (30 Python tests total) |
 | 12. CI + GitHub | **done** 2026-09-10 | `.github/workflows/ci.yml`: rustfmt, clippy `-D warnings`, cargo test; ruff, pytest; JSON Schema and compose validation |
-| 13. Continuous operation | **running** since 2026-09-10 | poller loop + fetcher + both workers + API via `scripts/run.sh`; the poller picked up 1819 papers from the Sep 8–9 announcements on its first steady-state cycles; full-text backlog (5615 abstract-only papers, ~6 h at the arXiv budget) in progress — see the table below |
+| 13. Continuous operation | **running** since 2026-09-10 16:59 UTC | poller loop: 63 cycles in 25 h, 0 crashes, 437 papers picked up from the 2026-09-10 announcement (79 + 358 in two cycles), 2 transient arXiv errors retried; fetcher drained the whole backlog in 10.4 h: 7,881 papers (7,455 HTML, 330 PDF, 64 abstract-only, 32 dead-lettered on connection errors, all replayable), 235,503 chunks, lag 0; abstract worker: 3,016 stored after the fix, lag 0 |
+| 14. Crash test | **done** 2026-09-11 | SIGKILL of the full-text worker mid-message, restart: the in-flight paper (2604.14501v2) was redelivered and stored again; 0 gappy chunk sets, 0 orphans, counts consistent. Found and fixed on the way: replay of `papers.new` could downgrade full-text rows, and a pre-check `SELECT` on a non-autocommit connection stopped every later transaction from committing (decision 30) |
 
 ## Live run log
 | When | What |
 |---|---|
-| 2026-09-10 | started `scripts/run.sh start` (all five); see BENCHMARKS.md "Continuous run" for cycle counts, papers/day, backlog progress |
+| 2026-09-10 16:59Z | started poller, fetcher and API via `scripts/run.sh`; workers at 17:06Z |
+| 2026-09-10 17:5xZ | both workers crashed (decision 30); fixed and restarted 17:48Z; full-text worker stopped again at 17:51Z by a SIGTERM from an interrupted shell and stayed down overnight (10,032 chunked papers queued, nothing lost) |
+| 2026-09-11 03:20Z | fetcher finished the backlog: 7,881 papers, 235,503 chunks |
+| 2026-09-11 17:30Z | poller 63 cycles / 25 h; DB 7,347 papers, 97 with full text (worker down), 0 gappy chunk sets, 0 orphans; DLQ 35 records (33 fetcher connect errors incl. 1 probe, 2 worker poison probes) |
+
+Append a row with `scripts/snapshot.sh`.
 
 ## Known gaps / next
 - PDF section detection is coarse (usually one "Body" section) because `pdftotext` reflow merges heading lines; HTML papers get real sections. Improve with `-layout` parsing or `pdfplumber` if it matters.
@@ -29,6 +35,7 @@ Plan approved 2026-09-07. Last update: 2026-09-10.
 - Retrieval eval is self-retrieval plus category precision, not a human-labelled relevance set; no BM25 baseline yet.
 - The HNSW index is not chosen by the planner at ~6K chunks (sequential exact scan is cheaper); re-measure once the full-text backlog multiplies the chunk count.
 - No auth or TLS on the query API.
+- Full-text worker throughput on the laptop (~7.5 s/paper with local summaries) is far below the fetcher's (~4.7 s/paper); run several workers or the Spark vLLM servers to keep up.
 
 ## Tests
 ```

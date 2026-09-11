@@ -3,7 +3,7 @@
 # worker totals, DB counts, consumer lag, DLQ size. Reads the Prometheus exporters and the compose stack.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-m() { curl -sf "localhost:$1/metrics" 2>/dev/null | grep -E "^$2" | awk '{s+=$NF} END {printf "%d", s}'; }
+m() { { curl -sf "localhost:$1/metrics" 2>/dev/null || true; } | { grep -E "^$2" || true; } | awk '{s+=$NF} END {printf "%d", s}'; }
 pg() { docker compose exec -T postgres psql -qtA -U arxiv -d arxiv -c "$1" | tr -d '[:space:]'; }
 lag() { docker compose exec -T redpanda rpk group describe "$1" 2>/dev/null | awk '$1=="'"$2"'" {l+=$6} END {print l+0}'; }
 hw() { docker compose exec -T redpanda rpk topic describe "$1" -p 2>/dev/null | awk 'NR>1 {s+=$6} END {print s+0}'; }
