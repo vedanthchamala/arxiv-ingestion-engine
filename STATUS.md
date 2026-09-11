@@ -15,8 +15,8 @@ Plan approved 2026-09-07. Last update: 2026-09-10.
 | 9. Metrics + dashboard | **done** 2026-09-10 | Prometheus exporters on all four stages + API `/metrics`; compose `observability` profile (Prometheus, Grafana, provisioned "arXiv pipeline" dashboard, 13 panels); Redpanda native consumer-lag metrics enabled |
 | 10. Containers | **done** 2026-09-10 | `rust/Dockerfile` + `python/Dockerfile`, compose `pipeline` profile (5 services); cold build 67 s, rebuild 9 s; images 236 MB (Rust) / 507 MB (Python); `--help`/import checks pass in-container |
 | 11. Evaluation + load test | **done** 2026-09-10 | `BENCHMARKS.md`: self-retrieval recall@1 1.000 (n=500), paraphrase recall@1 0.795 / recall@10 0.945 (n=200), precision@5 0.987 (15 queries); API cold p50 74 ms (105 before the prepared-statement fix), cache hit 34 ms, ~83 req/s at 8 and 32 clients with 0 errors; 15 API unit tests added (30 Python tests total) |
-| 12. CI + GitHub | **done** 2026-09-10 | `.github/workflows/ci.yml`: rustfmt, clippy `-D warnings`, cargo test; ruff, pytest; JSON Schema and compose validation |
-| 13. Continuous operation | **running** since 2026-09-10 16:59 UTC | poller loop: 63 cycles in 25 h, 0 crashes, 437 papers picked up from the 2026-09-10 announcement (79 + 358 in two cycles), 2 transient arXiv errors retried; fetcher drained the whole backlog in 10.4 h: 7,881 papers (7,455 HTML, 330 PDF, 64 abstract-only, 32 dead-lettered on connection errors, all replayable), 235,503 chunks, lag 0; abstract worker: 3,016 stored after the fix, lag 0 |
+| 12. CI + GitHub | **done** 2026-09-11 | pushed to `github.com/vedanthchamala/arxiv-ingestion-engine`; `.github/workflows/ci.yml`: rustfmt, clippy `-D warnings`, cargo test; ruff, pytest; JSON Schema and compose validation. First run failed on runner setup only (librdkafka needs libcurl/SASL/SSL headers; `uv sync` needs `--all-packages` in a workspace), fixed in the next commit |
+| 13. Continuous operation | **running** since 2026-09-10 16:59 UTC; two full-text workers draining the 10k queue since 2026-09-11 19:15 UTC (partitions split 3/3 across the consumer group) | poller loop: 63 cycles in 25 h, 0 crashes, 437 papers picked up from the 2026-09-10 announcement (79 + 358 in two cycles), 2 transient arXiv errors retried; fetcher drained the whole backlog in 10.4 h: 7,881 papers (7,455 HTML, 330 PDF, 64 abstract-only, 32 dead-lettered on connection errors, all replayable), 235,503 chunks, lag 0; abstract worker: 3,016 stored after the fix, lag 0 |
 | 14. Crash test | **done** 2026-09-11 | SIGKILL of the full-text worker mid-message, restart: the in-flight paper (2604.14501v2) was redelivered and stored again; 0 gappy chunk sets, 0 orphans, counts consistent. Found and fixed on the way: replay of `papers.new` could downgrade full-text rows, and a pre-check `SELECT` on a non-autocommit connection stopped every later transaction from committing (decision 30) |
 
 ## Live run log
@@ -40,6 +40,6 @@ Append a row with `scripts/snapshot.sh`.
 ## Tests
 ```
 cd rust   && cargo test && cargo clippy --all-targets -- -D warnings   # 17 tests (+1 Redis integration test: REDIS_URL=... cargo test -- --ignored)
-cd python && uv run pytest && uv run ruff check .                        # 30 tests
+cd python && uv run pytest && uv run ruff check .                        # 33 tests (2 skip without the live stack)
 ./scripts/smoke.sh                                                       # live stack consistency
 ```
