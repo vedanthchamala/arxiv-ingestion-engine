@@ -189,7 +189,10 @@ class Worker:
                         continue
                     raise KafkaException(msg.error())
                 self.handle(msg)
-                self.consumer.commit(message=msg, asynchronous=False)
+                try:
+                    self.consumer.commit(message=msg, asynchronous=False)
+                except KafkaException as e:
+                    log.warning("commit failed; message will be redelivered", error=str(e)[:200])
                 if max_messages and self.processed + self.failed >= max_messages:
                     break
                 if time.monotonic() - last_report > 30:

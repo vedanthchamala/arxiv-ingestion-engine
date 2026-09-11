@@ -13,7 +13,12 @@ from .text import author_norm
 
 
 def connect(database_url: str) -> psycopg.Connection:
-    conn = psycopg.connect(database_url, row_factory=dict_row)
+    """Autocommit on purpose: a bare SELECT must not open an implicit transaction, or the next
+    `conn.transaction()` block becomes a savepoint inside it and nothing ever commits. Every write
+    below runs in an explicit block."""
+    conn = psycopg.connect(
+        database_url, row_factory=dict_row, autocommit=True, options="-c lock_timeout=120000"
+    )
     register_vector(conn)
     return conn
 
@@ -90,7 +95,8 @@ def upsert_paper(
             return False
 
         conn.execute("DELETE FROM paper_authors WHERE arxiv_id = %s", (p.arxiv_id,))
-        for position, name in enumerate(p.authors):
+        # Lock shared author rows in one global order so two writers cannot deadlock on them.
+        for position, name in sorted(enumerate(p.authors), key=lambda a: author_norm(a[1])):
             row = conn.execute(
                 """
                 INSERT INTO authors (name, name_norm) VALUES (%s, %s)

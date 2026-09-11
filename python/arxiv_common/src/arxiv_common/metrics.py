@@ -1,6 +1,7 @@
 """Prometheus metrics shared by the worker and the query API. The names are a contract with the
 Rust stages and observability/grafana; change them there too."""
 
+import structlog
 from prometheus_client import Counter, Histogram, disable_created_metrics, start_http_server
 
 disable_created_metrics()
@@ -48,6 +49,13 @@ def init_api_labels() -> None:
 
 
 def start_metrics_server(port: int) -> None:
-    """Serve /metrics on a background thread; port 0 disables it."""
-    if port:
+    """Serve /metrics on a background thread; port 0 disables it. A busy port is a warning, not a
+    reason to stop ingesting."""
+    if not port:
+        return
+    try:
         start_http_server(port)
+    except OSError as e:
+        structlog.get_logger().warning(
+            "metrics port unavailable; continuing without /metrics", port=port, error=str(e)
+        )
