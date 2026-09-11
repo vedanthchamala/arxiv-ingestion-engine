@@ -27,6 +27,9 @@ Plan approved 2026-09-07. Last update: 2026-09-10.
 | 2026-09-11 03:20Z | fetcher finished the backlog: 7,881 papers, 235,503 chunks |
 | 2026-09-11 17:30Z | poller 63 cycles / 25 h; DB 7,347 papers, 97 with full text (worker down), 0 gappy chunk sets, 0 orphans; DLQ 35 records (33 fetcher connect errors incl. 1 probe, 2 worker poison probes) |
 
+| 2026-09-11 19:15Z | GitHub repo created and pushed; CI red on runner setup, fixed, green on the second run; two full-text workers started (partitions split 3/3) |
+| 2026-09-11 ~20:00Z | both full-text workers died on `_MAX_POLL_EXCEEDED`: Ollama on the laptop stalled under two concurrent 7B generations plus the abstract worker's embeddings, one message exceeded the 10-min poll interval, and the worker treated that consumer error as fatal. Fixed: only `fatal()` consumer errors abort (librdkafka rejoins after an eviction), `max.poll.interval.ms` 30 min, inference timeout 120 s; one worker restarted — scaling workers needs the GPU box, not the laptop |
+
 Append a row with `scripts/snapshot.sh`.
 
 ## Known gaps / next

@@ -39,7 +39,7 @@ class Worker:
                 "group.id": group,
                 "enable.auto.commit": False,
                 "auto.offset.reset": "earliest",
-                "max.poll.interval.ms": 600_000,
+                "max.poll.interval.ms": 1_800_000,
                 "session.timeout.ms": 45_000,
                 "partition.assignment.strategy": "cooperative-sticky",
             }
@@ -53,7 +53,7 @@ class Worker:
                 "message.timeout.ms": 30_000,
             }
         )
-        self.inference = InferenceClient(settings)
+        self.inference = InferenceClient(settings, timeout_s=120)
         self.conn = db.connect(settings.database_url)
         self.stop = False
         self.processed = 0
@@ -185,9 +185,12 @@ class Worker:
                 if msg is None:
                     continue
                 if msg.error():
-                    if msg.error().code() == KafkaError._PARTITION_EOF:
-                        continue
-                    raise KafkaException(msg.error())
+                    err = msg.error()
+                    if err.fatal():
+                        raise KafkaException(err)
+                    if err.code() != KafkaError._PARTITION_EOF:
+                        log.warning("consumer error; continuing", error=str(err)[:200])
+                    continue
                 self.handle(msg)
                 try:
                     self.consumer.commit(message=msg, asynchronous=False)
