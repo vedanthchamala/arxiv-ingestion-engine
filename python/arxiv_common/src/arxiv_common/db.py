@@ -6,10 +6,11 @@ from datetime import UTC, datetime
 
 import psycopg
 from pgvector.psycopg import register_vector
+from psycopg import sql
 from psycopg.rows import dict_row
 
 from .models import ChunkedPaper
-from .text import author_norm
+from .text import author_norm, strip_nul
 
 
 def connect(database_url: str) -> psycopg.Connection:
@@ -74,8 +75,8 @@ def upsert_paper(
             {
                 "arxiv_id": p.arxiv_id,
                 "version": p.version,
-                "title": p.title,
-                "abstract": p.abstract,
+                "title": strip_nul(p.title),
+                "abstract": strip_nul(p.abstract),
                 "primary_category": p.primary_category,
                 "categories": p.categories,
                 "published_at": p.published_at,
@@ -86,7 +87,7 @@ def upsert_paper(
                 "journal_ref": p.journal_ref,
                 "comment": p.comment,
                 "source": doc.source,
-                "summary": summary,
+                "summary": strip_nul(summary) if summary else summary,
                 "summary_model": summary_model,
                 "now": now,
             },
@@ -117,7 +118,15 @@ def upsert_paper(
                 "INSERT INTO chunks (id, arxiv_id, idx, section, text, token_count, embedding) "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s)",
                 [
-                    (f"{p.arxiv_id}:{c.idx}", p.arxiv_id, c.idx, c.section, c.text, c.token_count, list(e))
+                    (
+                        f"{p.arxiv_id}:{c.idx}",
+                        p.arxiv_id,
+                        c.idx,
+                        strip_nul(c.section) if c.section else c.section,
+                        strip_nul(c.text),
+                        c.token_count,
+                        list(e),
+                    )
                     for c, e in zip(doc.chunks, embeddings, strict=True)
                 ],
             )
@@ -148,9 +157,38 @@ def search(
     categories: Sequence[str] | None = None,
     since: datetime | None = None,
     candidate_chunks: int = 200,
+    ef_search: int | None = None,
 ) -> list[Hit]:
-    """Nearest chunks, then best chunk per paper, ordered by cosine similarity."""
-    rows = conn.execute(
+    """Nearest chunks, then best chunk per paper, ordered by cosine similarity.
+
+    `ef_search` widens pgvector's HNSW candidate list for this query only (default 40 misses ~6 %
+    of exact nearest neighbours at 230K chunks; see BENCHMARKS.md)."""
+    with conn.transaction():
+        if ef_search:
+            conn.execute(sql.SQL("SET LOCAL hnsw.ef_search = {}").format(sql.Literal(int(ef_search))))
+        rows = _search_rows(conn, query_vec, k, categories, since, candidate_chunks)
+    return [
+        Hit(
+            arxiv_id=r["arxiv_id"],
+            version=r["version"],
+            title=r["title"],
+            abstract=r["abstract"],
+            summary=r["summary"],
+            primary_category=r["primary_category"],
+            categories=list(r["categories"]),
+            published_at=r["published_at"],
+            authors=list(r["authors"]),
+            score=float(r["score"]),
+            chunk_idx=r["idx"],
+            chunk_section=r["section"],
+            chunk_text=r["chunk_text"],
+        )
+        for r in rows
+    ]
+
+
+def _search_rows(conn, query_vec, k, categories, since, candidate_chunks):
+    return conn.execute(
         """
         WITH nearest AS (
             SELECT c.arxiv_id, c.idx, c.section, c.text,
@@ -182,21 +220,3 @@ def search(
             "k": k,
         },
     ).fetchall()
-    return [
-        Hit(
-            arxiv_id=r["arxiv_id"],
-            version=r["version"],
-            title=r["title"],
-            abstract=r["abstract"],
-            summary=r["summary"],
-            primary_category=r["primary_category"],
-            categories=list(r["categories"]),
-            published_at=r["published_at"],
-            authors=list(r["authors"]),
-            score=float(r["score"]),
-            chunk_idx=r["idx"],
-            chunk_section=r["section"],
-            chunk_text=r["chunk_text"],
-        )
-        for r in rows
-    ]

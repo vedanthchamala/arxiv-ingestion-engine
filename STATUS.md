@@ -16,8 +16,9 @@ Plan approved 2026-09-07. Last update: 2026-09-10.
 | 10. Containers | **done** 2026-09-10 | `rust/Dockerfile` + `python/Dockerfile`, compose `pipeline` profile (5 services); cold build 67 s, rebuild 9 s; images 236 MB (Rust) / 507 MB (Python); `--help`/import checks pass in-container |
 | 11. Evaluation + load test | **done** 2026-09-10 | `BENCHMARKS.md`: self-retrieval recall@1 1.000 (n=500), paraphrase recall@1 0.795 / recall@10 0.945 (n=200), precision@5 0.987 (15 queries); API cold p50 74 ms (105 before the prepared-statement fix), cache hit 34 ms, ~83 req/s at 8 and 32 clients with 0 errors; 15 API unit tests added (30 Python tests total) |
 | 12. CI + GitHub | **done** 2026-09-11 | pushed to `github.com/vedanthchamala/arxiv-ingestion-engine`; `.github/workflows/ci.yml`: rustfmt, clippy `-D warnings`, cargo test; ruff, pytest; JSON Schema and compose validation. First run failed on runner setup only (librdkafka needs libcurl/SASL/SSL headers; `uv sync` needs `--all-packages` in a workspace), fixed in the next commit |
-| 13. Continuous operation | **running** since 2026-09-10 16:59 UTC; two full-text workers draining the 10k queue since 2026-09-11 19:15 UTC (partitions split 3/3 across the consumer group) | poller loop: 63 cycles in 25 h, 0 crashes, 437 papers picked up from the 2026-09-10 announcement (79 + 358 in two cycles), 2 transient arXiv errors retried; fetcher drained the whole backlog in 10.4 h: 7,881 papers (7,455 HTML, 330 PDF, 64 abstract-only, 32 dead-lettered on connection errors, all replayable), 235,503 chunks, lag 0; abstract worker: 3,016 stored after the fix, lag 0 |
+| 13. Continuous operation | **running** since 2026-09-10 16:59 UTC | poller: 138 cycles in 48 h, 0 crashes, 437 papers from the 2026-09-10 announcement (arXiv does not announce Fri/Sat); fetcher drained the backlog in 10.4 h (7,881 papers, 235,503 chunks); full-text worker drained its 10k queue in 12.6 h on one instance (7,732 stored, 5 dead-lettered on NUL bytes, ~5.9 s/paper on Ollama); every lag 0; DB 7,707 papers = every id in the seen-set, 229,487 chunks, 7,610 full-text, 7,672 summaries, 0 gappy chunk sets, 0 orphans |
 | 14. Crash test | **done** 2026-09-11 | SIGKILL of the full-text worker mid-message, restart: the in-flight paper (2604.14501v2) was redelivered and stored again; 0 gappy chunk sets, 0 orphans, counts consistent. Found and fixed on the way: replay of `papers.new` could downgrade full-text rows, and a pre-check `SELECT` on a non-autocommit connection stopped every later transaction from committing (decision 30) |
+| 15. Full-corpus tuning | **done** 2026-09-12 | at 229k chunks the planner uses HNSW and `ef_search` 40 lost 6 points of title recall@1; swept 40/100/200/400, default now 200 (`HNSW_EF_SEARCH`, `SET LOCAL` per query): recall@1 0.986, SQL p50 20 ms; API cold p50 58 ms, hit 36 ms, ~86 req/s, 0 errors (BENCHMARKS.md) |
 
 ## Live run log
 | When | What |
@@ -30,15 +31,18 @@ Plan approved 2026-09-07. Last update: 2026-09-10.
 | 2026-09-11 19:15Z | GitHub repo created and pushed; CI red on runner setup, fixed, green on the second run; two full-text workers started (partitions split 3/3) |
 | 2026-09-11 ~20:00Z | both full-text workers died on `_MAX_POLL_EXCEEDED`: Ollama on the laptop stalled under two concurrent 7B generations plus the abstract worker's embeddings, one message exceeded the 10-min poll interval, and the worker treated that consumer error as fatal. Fixed: only `fatal()` consumer errors abort (librdkafka rejoins after an eviction), `max.poll.interval.ms` 30 min, inference timeout 120 s; one worker restarted — scaling workers needs the GPU box, not the laptop |
 
+| 2026-09-12 11:27Z | full-text worker finished the queue: 7,732 stored since its 22:50Z restart, 5 dead-lettered (`PostgreSQL text fields cannot contain NUL`, fixed: NUL stripped in the Rust extractors and the Python sink); all 7,707 papers present, 7,610 with full text |
+| 2026-09-12 17:30Z | full-corpus eval + load test; `ef_search` 200 made the default; API restarted; smoke test 7/7 |
+
 Append a row with `scripts/snapshot.sh`.
 
 ## Known gaps / next
 - PDF section detection is coarse (usually one "Body" section) because `pdftotext` reflow merges heading lines; HTML papers get real sections. Improve with `-layout` parsing or `pdfplumber` if it matters.
 - Summary prompt still yields "The paper …" openers; tighten if desired.
 - Retrieval eval is self-retrieval plus category precision, not a human-labelled relevance set; no BM25 baseline yet.
-- The HNSW index is not chosen by the planner at ~6K chunks (sequential exact scan is cheaper); re-measure once the full-text backlog multiplies the chunk count.
 - No auth or TLS on the query API.
-- Full-text worker throughput on the laptop (~7.5 s/paper with local summaries) is far below the fetcher's (~4.7 s/paper); run several workers or the Spark vLLM servers to keep up.
+- Full-text worker throughput on the laptop (~6 s/paper with local summaries) is below the fetcher's (~4.7 s/paper); a second laptop worker made Ollama stall, so keeping up on a big day needs the Spark vLLM servers.
+- Five papers are dead-lettered with NUL bytes in their text; the fix is in, they can be replayed from `papers.failed`.
 
 ## Tests
 ```

@@ -4,7 +4,7 @@ import pytest
 
 from arxiv_common import schema
 from arxiv_common.models import ChunkedPaper, Paper
-from arxiv_common.text import author_norm, l2_normalize
+from arxiv_common.text import author_norm, l2_normalize, strip_nul
 
 
 def sample_paper() -> Paper:
@@ -74,3 +74,7 @@ def test_author_norm_and_l2():
     assert author_norm("José Ángel") == "jose angel"
     v = l2_normalize([3.0, 4.0])
     assert abs(v[0] - 0.6) < 1e-9 and abs(v[1] - 0.8) < 1e-9
+
+
+def test_strip_nul_removes_only_nul_bytes():
+    assert strip_nul("a\x00b\tc") == "ab\tc"

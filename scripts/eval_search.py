@@ -122,6 +122,7 @@ def main() -> None:
     ap.add_argument("--n", type=int, default=500, help="papers sampled for self-retrieval")
     ap.add_argument("--paraphrase-n", type=int, default=200, help="subset of the sample used for paraphrase")
     ap.add_argument("--k", type=int, default=10)
+    ap.add_argument("--ef-search", type=int, default=None, help="pgvector hnsw.ef_search for the run")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--database-url", default=defaults.database_url)
     ap.add_argument("--embedding-url", default=defaults.embedding_url)
@@ -151,7 +152,7 @@ def main() -> None:
         t0 = time.perf_counter()
         vec = client.embed([text])[0]
         t1 = time.perf_counter()
-        hits = db.search(conn, vec, k=k, categories=categories)
+        hits = db.search(conn, vec, k=k, categories=categories, ef_search=args.ef_search)
         t2 = time.perf_counter()
         embed_ms.append((t1 - t0) * 1000)
         (sql_filtered_ms if categories else sql_ms).append((t2 - t1) * 1000)
@@ -162,7 +163,7 @@ def main() -> None:
     for p in sample:
         vec, hits = timed_search(p["title"], args.k)
         t0 = time.perf_counter()
-        hits_f = db.search(conn, vec, k=args.k, categories=[p["primary_category"]])
+        hits_f = db.search(conn, vec, k=args.k, categories=[p["primary_category"]], ef_search=args.ef_search)
         sql_filtered_ms.append((time.perf_counter() - t0) * 1000)
         self_rows.append(
             {

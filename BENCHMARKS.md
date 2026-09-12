@@ -140,12 +140,48 @@ What these numbers do and do not say:
 - Cache paraphrase hits: 9/10. The miss is an acronym expansion (SLAM -> simultaneous localization and mapping), whose
   bge-m3 distance exceeds the 0.12 threshold.
 
+## Full corpus: 229,487 chunks (2026-09-12)
+
+After the full-text worker drained the backlog the corpus is **7,707 papers, 229,487 chunks, 7,610 with
+full text (7,294 HTML, 316 PDF), 7,672 summaries**. Two things changed versus the 6K-chunk runs above.
+
+**The planner now uses the HNSW index** (`Index Scan using chunks_embedding_hnsw`, ~5 ms for the ANN
+step), and approximate search has a recall cost that pgvector's default `hnsw.ef_search = 40` makes
+visible. Same `eval_search.py` protocol (seed 42, n = 500 titles / 200 first sentences, 15 category
+queries), sweeping `ef_search` per query:
+
+| `ef_search` | Title → own paper R@1 | R@5 | Paraphrase R@1 | R@10 | precision@5 | SQL p50 unfiltered | SQL p50 filtered |
+|---|---|---|---|---|---|---|---|
+| 40 (pgvector default) | 0.936 | 0.942 | 0.705 | 0.885 | 0.960 | 10.6 ms | 6.0 ms |
+| 100 | 0.976 | 0.982 | 0.720 | 0.905 | 0.960 | 15.2 ms | 6.5 ms |
+| **200 (chosen)** | **0.986** | **0.992** | **0.725** | **0.910** | **0.960** | **20.4 ms** | **9.1 ms** |
+| 400 | 0.994 | 1.000 | 0.725 | 0.915 | 0.960 | 26.8 ms | 13.1 ms |
+
+The misses at 40 are total (the paper is absent from the 200-candidate window, not merely ranked low),
+i.e. HNSW recall, not ranking. 200 is the default (`HNSW_EF_SEARCH`), applied with `SET LOCAL` per
+query; it buys back 5 points of recall for ~10 ms. Paraphrase recall is lower than on the abstract-only
+corpus (0.795 → 0.725 at R@1) because body chunks from other papers now compete with the target's
+abstract chunk; precision@5 is 0.960 (was 0.987).
+
+**Query API on the full corpus** (`bench_api.py`, `ef_search` 200, same 60-query pool, one API on :8000):
+
+| Phase | Conc. | Requests | Errors | req/s | Cached | p50 ms | p95 ms | p99 ms |
+|---|---|---|---|---|---|---|---|---|
+| cold (cache cleared, sequential) | 1 | 60 | 0 | - | 0 % | 58 | 72 | 134 |
+| warm (same queries again) | 1 | 60 | 0 | - | 100 % | 36 | 42 | 45 |
+| paraphrases of cached queries | 1 | 10 | 0 | - | 90 % | 39 | 68 | 68 |
+| sweep 8 workers × 20 s | 8 | 1738 | 0 | 86.5 | 97 % | 92 | 100 | 103 |
+| sweep 32 workers × 20 s | 32 | 1742 | 0 | 85.6 | 97 % | 371 | 386 | 392 |
+
+Cold search got faster with 38× more chunks (74 → 58 ms p50) because the index replaced the sequential
+scan. The throughput ceiling is unchanged and is still Ollama's embedding rate on the laptop.
+
 ## How to reproduce
 
 ```
 docker compose up -d && ollama serve                     # Postgres/pgvector, Redis, Redpanda; Ollama with `ollama pull bge-m3`
 uv run --project python python -m uvicorn arxiv_query_api.main:app --port 8001   # query API on Ollama defaults, if none is running (do not source .env: it points at the Spark)
-uv run --project python python scripts/eval_search.py --n 500 --paraphrase-n 200 --seed 42      # -> data/eval_search.json
+uv run --project python python scripts/eval_search.py --n 500 --paraphrase-n 200 --seed 42 [--ef-search 200]   # -> data/eval_search.json
 uv run --project python python scripts/bench_api.py --base-url http://127.0.0.1:8001 --duration 20 --concurrency 8,32   # -> data/bench_api.json
 uv run --project python ruff check --config python/pyproject.toml scripts/
 ```

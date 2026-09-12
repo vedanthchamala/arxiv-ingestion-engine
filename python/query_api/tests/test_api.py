@@ -105,7 +105,7 @@ def test_post_search_returns_hits_with_expected_shape(client, search):
     assert body["hits"][0]["published_at"].startswith("2026-09-01T00:00:00")
     state.inference.embed.assert_called_once_with(["diffusion policy"])
     args, kwargs = search.call_args
-    assert args == (CONN, VEC) and kwargs == {"k": 3, "categories": None, "since": None}
+    assert args == (CONN, VEC) and kwargs == {"k": 3, "categories": None, "since": None, "ef_search": 200}
 
 
 def test_get_search_passes_filters_to_db(client, search):
@@ -118,12 +118,17 @@ def test_get_search_passes_filters_to_db(client, search):
     search.assert_called_once()
     args, kwargs = search.call_args
     assert args == (CONN, VEC)
-    assert kwargs == {"k": 5, "categories": ["cs.RO", "cs.LG"], "since": datetime(2026, 9, 1, tzinfo=UTC)}
+    assert kwargs == {
+        "k": 5,
+        "categories": ["cs.RO", "cs.LG"],
+        "since": datetime(2026, 9, 1, tzinfo=UTC),
+        "ef_search": 200,
+    }
 
 
 def test_get_search_single_category(client, search):
     assert client.get("/search", params={"q": "grasping", "category": "cs.RO"}).status_code == 200
-    assert search.call_args.kwargs == {"k": 10, "categories": ["cs.RO"], "since": None}
+    assert search.call_args.kwargs == {"k": 10, "categories": ["cs.RO"], "since": None, "ef_search": 200}
 
 
 @pytest.mark.parametrize("body", [{}, {"query": ""}, {"query": "x", "k": 0}, {"query": "x", "k": 51}])

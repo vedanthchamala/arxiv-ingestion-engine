@@ -120,7 +120,7 @@ fn push_text(el: ElementRef, s: &mut String) {
 }
 
 pub fn normalize(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
+    s.replace('\0', "").split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]

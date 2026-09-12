@@ -21,3 +21,8 @@ def l2_normalize(vec: list[float]) -> list[float]:
     if norm == 0.0:
         return vec
     return [x / norm for x in vec]
+
+
+def strip_nul(s: str) -> str:
+    """Postgres text columns reject NUL bytes; extracted PDF/HTML text occasionally carries them."""
+    return s.replace("\x00", "")

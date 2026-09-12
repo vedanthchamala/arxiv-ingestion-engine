@@ -110,7 +110,9 @@ def run_search(req: SearchRequest) -> SearchResponse:
             resp.cached = True
             return _finish(resp, t0)
     with state.pool.connection() as conn, metrics.API_DB_SEARCH_SECONDS.time():
-        hits = db.search(conn, qvec, k=req.k, categories=req.categories, since=req.since)
+        hits = db.search(
+            conn, qvec, k=req.k, categories=req.categories, since=req.since, ef_search=settings.hnsw_ef_search
+        )
     resp = SearchResponse(
         query=req.query,
         took_ms=int((time.monotonic() - t0) * 1000),

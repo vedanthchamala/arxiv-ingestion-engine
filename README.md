@@ -132,16 +132,23 @@ API latency, dead letters, cache hit rate, consumer lag.
 
 ## What it has done so far
 
-- Ran unattended for over a day: 70 poll cycles, no crashes, and the next night's announcement
-  picked up within one cycle.
+- Ran unattended for two days: 138 poll cycles, no crashes, the next night's announcement picked up
+  within one cycle.
 - Fetched and chunked the full text of 7,881 papers (95 % from arXiv's HTML) into 235,000 chunks
-  in about ten hours, which is exactly arXiv's rate limit.
-- Search answers in about 74 ms cold and 34 ms from the cache, and holds roughly 83 requests per
+  in about ten hours, which is exactly arXiv's rate limit; the worker then embedded and summarized
+  them at about six seconds a paper on the laptop. The database holds 7,707 papers, 7,610 with
+  full text, 229,487 chunks and 7,672 summaries.
+- Search answers in about 58 ms cold and 36 ms from the cache, and holds roughly 86 requests per
   second on the laptop with no errors; the ceiling is the local embedding model.
+- Retrieval was measured, not assumed: on the full corpus a paper's title finds the paper at rank 1
+  98.6 % of the time, its first abstract sentence 72.5 %, and 96 % of top-5 hits for topical queries
+  land in the expected category. Getting there meant raising pgvector's `ef_search` from 40 to 200
+  once the HNSW index took over from sequential scans.
 - Survived a `kill -9` mid-message: the paper in flight was redelivered and stored again with no
   gaps, duplicates or orphans.
-- Found two real bugs in its first day of operation (a replay that could overwrite full text, and
-  a database connection that had quietly stopped committing). Both are fixed and written up.
+- Found three real bugs in its first days of operation (a replay that could overwrite full text, a
+  database connection that had quietly stopped committing, NUL bytes in extracted text). All fixed
+  and written up.
 
 ## Layout
 

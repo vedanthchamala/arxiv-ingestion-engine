@@ -52,7 +52,7 @@ pub async fn pdftotext(path: &Path) -> Result<String> {
 /// Reflows extracted text: joins hyphenated line breaks, keeps blank lines as paragraph breaks,
 /// and drops the reference list when a heading for it appears in the back half of the paper.
 pub fn clean(text: &str) -> String {
-    let text = text.replace('\r', "");
+    let text = text.replace(['\r', '\0'], "");
     let text = HYPHEN_BREAK.replace_all(&text, "$1$2");
     let cut = REFERENCES_HEADING
         .find_iter(&text)
@@ -113,6 +113,11 @@ pub fn into_sections(clean_text: &str) -> Vec<Section> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clean_drops_nul_bytes() {
+        assert_eq!(clean("a\0b c\0"), "ab c");
+    }
 
     #[test]
     fn clean_joins_hyphens_and_strips_references() {
