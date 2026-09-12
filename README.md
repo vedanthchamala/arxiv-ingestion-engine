@@ -44,30 +44,65 @@ at-least-once and every database write is an upsert, so a replayed or duplicated
 harmless. Messages that fail after three attempts go to a `papers.failed` topic with their
 original payload, so they can be inspected and replayed.
 
-## Design choices worth knowing
+## Architecture
 
-- **arXiv allows one request every three seconds, counted across all your machines.** That single
-  rule shapes most of the design: there is exactly one fetcher, and every process that talks to
-  arxiv.org (poller, fetcher, backfill) reserves its send slot from one shared budget in Redis
-  before sending. Two processes were run against arXiv at once to check it: no two requests were
-  closer than three seconds.
-- **Rust where the job is I/O and rate limiting** (poller, fetcher), **Python where the job is
-  ML-adjacent** (embedding, summarizing, the search API). Two stages, not two implementations of
-  the same stage.
-- **One JSON Schema file is the message contract.** Rust compiles it in, Python loads it, both
-  validate every message, and each side's tests check messages produced by the other.
-- **pgvector instead of a separate vector database**, so a paper, its authors and its chunks are
-  written in one transaction and filters and nearest-neighbour search are one SQL query.
-- **Inference behind OpenAI-compatible HTTP.** vLLM on a DGX Spark serves embeddings (`bge-m3`) and
-  summaries (`Qwen2.5-7B-Instruct`); Ollama on the laptop serves the same endpoints as a fallback.
-  Switching is two environment variables.
-- **The fast path never downgrades the slow path.** An abstract-only write is skipped when full
-  text is already stored for that version, so the two consumers can run in any order and either
-  topic can be replayed from the start.
+**Components**
 
-All thirty decisions, including the ones that came out of running the system for a day, are in
-[`DECISIONS.md`](DECISIONS.md). [`SPEC.md`](SPEC.md) has the design, [`STATUS.md`](STATUS.md) the
-live-run log, [`BENCHMARKS.md`](BENCHMARKS.md) the measurements.
+| Stage | Language | Reads | Writes | Job |
+|---|---|---|---|---|
+| poller | Rust | arXiv API | `papers.new` | Polls each category every 15 min, dedups against a Redis set, emits one message per new paper version |
+| fetcher | Rust | `papers.new` | `papers.chunked`, `papers.failed` | Downloads full text (HTML, then PDF), splits it into 512-token chunks; the only process that downloads from arxiv.org |
+| worker-abstract | Python | `papers.new` | Postgres | Embeds title + abstract so the paper is searchable within seconds |
+| worker | Python | `papers.chunked` | Postgres, `papers.failed` | Embeds every chunk, writes a summary, replaces the abstract-only row |
+| query API | Python (FastAPI) | HTTP | — | `/search`, `/papers/{id}`, `/stats`, `/metrics`; semantic cache in front of the vector search |
+
+**Data**
+
+- **Redpanda** (Kafka API): `papers.new`, `papers.chunked`, `papers.failed`. Six partitions each,
+  keyed by arXiv id. Consumers commit offsets manually after each message; delivery is
+  at-least-once.
+- **Postgres + pgvector**: `papers`, `authors`, `paper_authors`, `chunks` (`vector(1024)` with an
+  HNSW cosine index). One transaction per paper; every write is an upsert, so replays converge.
+- **Redis**: `arxiv:seen` (which paper versions have been produced), `arxiv:ratelimit` (the shared
+  request budget), and the vector index behind the semantic cache.
+
+**Contracts shared by both languages**
+
+- `schemas/messages.v1.json` defines `paper`, `chunk`, `chunked` and `failed`. Rust compiles it in,
+  Python loads it; every message is validated on the way out and on the way in, and each side's
+  tests check messages produced by the other.
+- `schemas/ratelimit.lua` is the arXiv request budget: an atomic slot reservation on the Redis
+  clock that returns how long to sleep. Poller, fetcher and backfill all call it before every
+  request, so the system as a whole never sends faster than one request per three seconds, which is
+  arXiv's rule across all of a user's machines.
+
+**Inference**
+
+Embeddings (`BAAI/bge-m3`, 1024-d) and summaries (`Qwen2.5-7B-Instruct`) come from an
+OpenAI-compatible HTTP endpoint. vLLM on a DGX Spark is the intended server; Ollama on the laptop
+serves the same two endpoints and is what the defaults point at. Chunks are sized with the embedding
+model's own tokenizer so token counts are exact.
+
+**Failure handling**
+
+- Transient errors retry three times with backoff, then the message goes to `papers.failed` with its
+  original payload attached; malformed messages go there immediately.
+- A paper with no extractable text is stored abstract-only, not failed.
+- An abstract-only write never replaces stored full text for the same version, so the two consumers
+  of `papers.new` can run in any order and either topic can be replayed from the start.
+- Database connections are autocommit with every write in an explicit transaction block, and shared
+  author rows are locked in a fixed order, so concurrent writers neither lose commits nor deadlock.
+
+**Operations**
+
+Every stage exports Prometheus metrics; a compose profile runs Prometheus and Grafana with one
+provisioned dashboard (throughput per stage, arXiv request rate, latency percentiles, dead letters,
+cache hit rate, consumer lag). Another profile runs the five services as containers. CI runs
+rustfmt, clippy, cargo test, ruff, pytest, and validates the schema and the compose file.
+
+The reasoning behind each choice, including the ones that came out of running the system for a day,
+is in [`DECISIONS.md`](DECISIONS.md). [`SPEC.md`](SPEC.md) has the design, [`STATUS.md`](STATUS.md)
+the live-run log, [`BENCHMARKS.md`](BENCHMARKS.md) the measurements.
 
 ## Running it
 
