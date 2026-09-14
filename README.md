@@ -132,12 +132,14 @@ API latency, dead letters, cache hit rate, consumer lag.
 
 ## What it has done so far
 
-- Ran unattended for two days: 138 poll cycles, no crashes, the next night's announcement picked up
-  within one cycle.
+- Ran unattended for four days: 211 poll cycles, no crashes, both announcement nights in that
+  window picked up (437 and 347 papers). arXiv's API started rate-limiting the poller with 429s on
+  day two despite the 3-second spacing; retries got the papers through, and the poller now backs
+  off properly when that happens.
 - Fetched and chunked the full text of 7,881 papers (95 % from arXiv's HTML) into 235,000 chunks
   in about ten hours, which is exactly arXiv's rate limit; the worker then embedded and summarized
-  them at about six seconds a paper on the laptop. The database holds 7,707 papers, 7,610 with
-  full text, 229,487 chunks and 7,672 summaries.
+  them at about six seconds a paper on the laptop. The database holds 8,054 papers, 7,957 with
+  full text, 239,912 chunks and 8,019 summaries.
 - Search answers in about 58 ms cold and 36 ms from the cache, and holds roughly 86 requests per
   second on the laptop with no errors; the ceiling is the local embedding model.
 - Retrieval was measured, not assumed: on the full corpus a paper's title finds the paper at rank 1

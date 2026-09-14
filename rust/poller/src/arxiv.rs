@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use common::models::{Paper, SCHEMA_VERSION};
 use common::ratelimit::Limiter;
 use common::telemetry::{record_arxiv_request, record_ratelimit_wait};
+use reqwest::StatusCode;
 use roxmltree::{Document, Node};
 use tracing::{debug, warn};
 
@@ -67,7 +68,12 @@ impl ArxivClient {
         let resp = match sent {
             Ok(r) => r,
             Err(e) => {
-                record_arxiv_request(PROCESS, "api", "error");
+                let outcome = if e.status() == Some(StatusCode::TOO_MANY_REQUESTS) {
+                    "throttled"
+                } else {
+                    "error"
+                };
+                record_arxiv_request(PROCESS, "api", outcome);
                 return Err(e).context("arxiv request");
             }
         };

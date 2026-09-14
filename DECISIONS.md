@@ -35,6 +35,7 @@ was made. "Superseded" entries are kept so the reasoning trail stays intact.
 | [28](#28-prometheus-metrics-on-every-stage) | Prometheus metrics on every stage; Grafana dashboard | accepted (amends 25) |
 | [29](#29-containerized-pipeline-services) | Containerized pipeline services behind a compose profile | accepted (amends 24) |
 | [30](#30-the-fast-path-never-downgrades-full-text-and-reads-never-open-transactions) | The fast path never downgrades full text; reads never open transactions | accepted (amends 9, 14) |
+| [31](#31-a-failed-page-keeps-the-pages-before-it-and-429-means-back-off) | A failed page keeps the pages before it; 429 means back off, not retry fast | accepted (amends 3, 11) |
 
 ---
 
@@ -312,3 +313,18 @@ be replayed in any order. Verified by killing the full-text worker with SIGKILL 
 in-flight paper was redelivered and stored again, with no gap, duplicate or orphan in `chunks`
 and every count consistent (STATUS.md). The cost of the pre-check is one indexed `SELECT` per
 abstract message.
+
+## 31. A failed page keeps the pages before it, and 429 means back off, not retry fast
+**Date** 2026-09-14 · **Context** Four days into the continuous run the poller's log said
+`produced=0` for every cycle after 2026-09-11 while the database kept receiving new papers.
+Two defects: `poll_category` propagated a later page's failure with `?`, discarding the stats and
+metrics for pages it had already produced; and errors were logged with `Display`, which for
+`anyhow` prints only the outermost context (`arxiv request`), hiding the cause. Printing the chain
+showed arXiv's export API answering **429 Too Many Requests** on about two thirds of requests
+despite the shared 3 s budget, and the 5/10/15/20 s retry backoff was tuned for transient 5xx, not
+throttling. **Decision** A page failure after the first page is logged and ends the category's
+walk for this cycle, returning the partial stats (`page_errors` counts it); the next cycle resumes
+from the top. Errors are logged with `{:#}`. A 429 backs off 30/60/120/240 s and is counted as
+`arxiv_requests_total{outcome="throttled"}`. **Consequences** Metrics and logs match the database
+again; throttling is visible on the dashboard instead of disguised as generic errors; a throttled
+cycle takes longer but the 15-minute schedule absorbs it. The cause of the 429s is still open.

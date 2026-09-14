@@ -76,6 +76,7 @@ struct CycleStats {
     produced: usize,
     skipped_seen: usize,
     invalid: usize,
+    page_errors: usize,
 }
 
 #[tokio::main]
@@ -128,6 +129,7 @@ async fn main() -> Result<()> {
                         produced = s.produced,
                         seen = s.skipped_seen,
                         invalid = s.invalid,
+                        page_errors = s.page_errors,
                         "category done"
                     );
                     for (result, n) in [
@@ -143,14 +145,16 @@ async fn main() -> Result<()> {
                     total.produced += s.produced;
                     total.skipped_seen += s.skipped_seen;
                     total.invalid += s.invalid;
+                    total.page_errors += s.page_errors;
                 }
-                Err(e) => error!(category, error = %e, "category failed; continuing"),
+                Err(e) => error!(category, error = %format!("{e:#}"), "category failed; continuing"),
             }
         }
         info!(
             produced = total.produced,
             fetched = total.fetched,
             pages = total.pages,
+            page_errors = total.page_errors,
             elapsed_s = started.elapsed().as_secs(),
             "cycle done"
         );
@@ -192,7 +196,16 @@ async fn poll_category(ctx: &mut Ctx, category: &str) -> Result<CycleStats> {
     let mut stats = CycleStats::default();
     let mut start = 0usize;
     while stats.pages < ctx.args.max_pages {
-        let page = fetch_page_with_retry(ctx, category, start).await?;
+        let page = match fetch_page_with_retry(ctx, category, start).await {
+            Ok(page) => page,
+            Err(e) if stats.pages == 0 => return Err(e),
+            Err(e) => {
+                // Keep what earlier pages already produced; the next cycle resumes from the top.
+                warn!(category, start, error = %format!("{e:#}"), "page failed after retries; keeping earlier pages");
+                stats.page_errors += 1;
+                break;
+            }
+        };
         stats.pages += 1;
         if page.entries.is_empty() {
             break;
@@ -247,6 +260,7 @@ async fn poll_category(ctx: &mut Ctx, category: &str) -> Result<CycleStats> {
 async fn fetch_page_with_retry(ctx: &Ctx, category: &str, start: usize) -> Result<arxiv::Page> {
     let mut last_err = None;
     for attempt in 1..=4u32 {
+        let mut throttled = false;
         match ctx.arxiv.category_page(category, start, ctx.args.page_size).await {
             Ok(page) if page.entries.is_empty() && start < page.total_results && attempt < 4 => {
                 warn!(
@@ -259,11 +273,19 @@ async fn fetch_page_with_retry(ctx: &Ctx, category: &str, start: usize) -> Resul
             }
             Ok(page) => return Ok(page),
             Err(e) => {
-                warn!(category, start, attempt, error = %e, "arxiv request failed; retrying");
+                throttled = e.downcast_ref::<reqwest::Error>().and_then(|r| r.status())
+                    == Some(reqwest::StatusCode::TOO_MANY_REQUESTS);
+                warn!(category, start, attempt, throttled, error = %format!("{e:#}"), "arxiv request failed; retrying");
                 last_err = Some(e);
             }
         }
-        sleep(Duration::from_secs(5 * attempt as u64)).await;
+        // 429 means arXiv wants us slower, not more persistent: exponential backoff from 30 s.
+        let delay = if throttled {
+            30 * 2u64.pow(attempt - 1)
+        } else {
+            5 * attempt as u64
+        };
+        sleep(Duration::from_secs(delay)).await;
     }
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("arxiv returned empty pages for {category} at start={start}")))
 }
