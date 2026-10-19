@@ -2,6 +2,7 @@
 cached vector search."""
 
 import time
+from dataclasses import dataclass
 from datetime import datetime
 
 from psycopg_pool import ConnectionPool
@@ -124,3 +125,31 @@ def _finish(resp: SearchResponse, t0: float) -> SearchResponse:
     metrics.API_SEARCH_SECONDS.labels(cached).observe(took)
     metrics.API_SEARCH.labels(cached).inc()
     return resp
+
+
+@dataclass
+class WatchMatch:
+    hit: SearchHit
+    new: bool
+
+
+def watch_matches(watch: dict, since: datetime | None, k: int = 50) -> list[WatchMatch]:
+    """Papers since `since` that match a saved search: a keyword match, or a best chunk at least
+    WATCH_MIN_SCORE similar (a plain top-k would always return k papers, even on a quiet day).
+    New ones (ingested after the last visit) first, relevance order within each group."""
+    with state.pool.connection() as conn:
+        hits = db.search(
+            conn,
+            watch["embedding"].to_list(),
+            k=k,
+            categories=watch["categories"],
+            since=since,
+            ef_search=settings.hnsw_ef_search,
+            text=watch["query"] if state.hybrid else None,
+        )
+        hits = [h for h in hits if h.keyword or h.score >= settings.watch_min_score]
+        ingested = db.ingested_at(conn, [h.arxiv_id for h in hits]) if hits else {}
+    matches = [
+        WatchMatch(to_hit(h), ingested.get(h.arxiv_id, watch["seen_at"]) > watch["seen_at"]) for h in hits
+    ]
+    return sorted(matches, key=lambda m: not m.new)

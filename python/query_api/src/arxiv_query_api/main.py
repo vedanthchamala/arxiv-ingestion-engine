@@ -15,7 +15,7 @@ from arxiv_common import db, metrics
 from arxiv_common.inference import InferenceClient
 from arxiv_common.logging import configure
 
-from . import ui
+from . import ui, watches
 from .cache import SearchCache
 from .service import SearchHit, SearchRequest, SearchResponse, run_search, settings, similar, state
 
@@ -64,6 +64,7 @@ def _register_vector(conn):
 app = FastAPI(title="arXiv semantic search", version="0.2.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 app.include_router(ui.router)
+app.include_router(watches.router)
 
 
 @app.post("/search", response_model=SearchResponse)

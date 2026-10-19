@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Watches · arXiv search{% endblock %}
+{% block content %}
+<div class="head-row">
+  <h1 class="page-title">Watches</h1>
+  <nav class="seg-links" aria-label="Window">
+    {% for value, label in windows %}<a href="/watches?within={{ value }}"{% if value == within %} aria-current="true"{% endif %}>{{ label }}</a>{% endfor %}
+  </nav>
+</div>
+<p class="fine">Saved searches. Each lists the papers that match it in the window; <span class="new">new</span> marks papers that arrived since you last opened that watch.</p>
+
+{% for r in rows %}
+{% set new_count = r.matches | selectattr("new") | list | length %}
+<section class="watch">
+  <div class="watch-head">
+    <h2><a href="/watches/{{ r.watch.id }}?within={{ within }}">{{ r.watch.name }}</a></h2>
+    <span class="counts">{% if new_count %}<b>{{ new_count }} new</b> · {% endif %}{{ r.matches | length }}{% if r.matches | length >= limit %}+{% endif %} matching</span>
+  </div>
+  {% if r.watch.name != r.watch.query or r.watch.categories %}
+  <p class="fine q">“{{ r.watch.query }}”{% if r.watch.categories %} in {{ r.watch.categories | map("category_name") | join(", ") }}{% endif %}</p>
+  {% endif %}
+  {% for m in r.matches[:3] %}
+  <a class="related" href="/paper/{{ m.hit.arxiv_id }}">
+    <span class="r-title">{% if m.new %}<span class="new">new</span> {% endif %}{{ m.hit.title }}</span>
+    <span class="r-meta">{{ m.hit.primary_category }} · {{ m.hit.published_at | date }}</span>
+  </a>
+  {% else %}
+  <p class="fine">Nothing in this window.</p>
+  {% endfor %}
+  {% if r.matches | length > 3 %}<a class="all" href="/watches/{{ r.watch.id }}?within={{ within }}">All {{ r.matches | length }} →</a>{% endif %}
+</section>
+{% else %}
+<p class="empty">No watches yet. Search for something and choose “Watch this search”, or add one below.</p>
+{% endfor %}
+
+<form class="new-watch" method="post" action="/watches">
+  <h2>New watch</h2>
+  <div class="bar">
+    <input type="text" name="query" required maxlength="500" aria-label="Query" placeholder="Query, e.g. diffusion policy for robot manipulation">
+  </div>
+  <div class="bar">
+    <input type="text" name="name" maxlength="120" aria-label="Name" placeholder="Name (optional)">
+  </div>
+  <div class="filters">
+    <fieldset class="chips">
+      <legend class="sr">Categories</legend>
+      {% for code in categories %}
+      <label class="chip"><input type="checkbox" name="cat" value="{{ code }}"><span>{{ category_name(code) }}</span></label>
+      {% endfor %}
+    </fieldset>
+    <button type="submit" class="btn solid">Save watch</button>
+  </div>
+</form>
+{% endblock %}

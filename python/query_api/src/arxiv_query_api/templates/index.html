@@ -36,9 +36,16 @@
 {% if error %}
 <div class="error" role="alert">{{ error }}</div>
 {% elif q %}
-<p class="count">
-  {{ resp.hits | length }} result{{ "" if resp.hits | length == 1 else "s" }} · {{ resp.took_ms }} ms{% if resp.cached %} · from cache{% endif %}
-</p>
+<div class="count-row">
+  <p class="count">
+    {{ resp.hits | length }} result{{ "" if resp.hits | length == 1 else "s" }} · {{ resp.took_ms }} ms{% if resp.cached %} · from cache{% endif %}
+  </p>
+  <form method="post" action="/watches">
+    <input type="hidden" name="query" value="{{ q }}">
+    {% for c in selected %}<input type="hidden" name="cat" value="{{ c }}">{% endfor %}
+    <button type="submit" class="link-btn">+ Watch this search</button>
+  </form>
+</div>
 {% if author %}
 <a class="author-hit" href="/author?name={{ author.name | urlencode }}">
   {{ author.papers }} paper{{ "" if author.papers == 1 else "s" }} by <b>{{ author.name }}</b> →

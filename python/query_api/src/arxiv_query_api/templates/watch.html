@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}{{ watch.name }} · Watches · arXiv search{% endblock %}
+{% block content %}
+<p class="crumbs"><a href="/watches">← All watches</a></p>
+<div class="head-row">
+  <h1 class="page-title">{{ watch.name }}</h1>
+  <nav class="seg-links" aria-label="Window">
+    {% for value, label in windows %}<a href="/watches/{{ watch.id }}?within={{ value }}"{% if value == within %} aria-current="true"{% endif %}>{{ label }}</a>{% endfor %}
+  </nav>
+</div>
+<p class="fine q">
+  “{{ watch.query }}”{% if watch.categories %} in {{ watch.categories | map("category_name") | join(", ") }}{% endif %}
+  · <a href="/?q={{ watch.query | urlencode }}{% for c in watch.categories or [] %}&cat={{ c }}{% endfor %}">open as search</a>
+  · <a href="/watches/{{ watch.id }}/feed.xml">Atom feed</a>
+</p>
+{% set new_count = matches | selectattr("new") | list | length %}
+<p class="count">{{ matches | length }}{% if matches | length >= limit %}+{% endif %} matching{% if new_count %} · {{ new_count }} new since {{ watch.seen_at | date }}{% endif %}</p>
+{% for m in matches %}{% with p = m.hit, new = m.new %}{% include "_paper.html" %}{% endwith %}{% endfor %}
+{% if not matches %}<p class="empty">Nothing matched in this window. Try a longer one.</p>{% endif %}
+<form method="post" action="/watches/{{ watch.id }}/delete" class="danger-zone">
+  <button type="submit" class="link-btn danger">Delete this watch</button>
+</form>
+{% endblock %}

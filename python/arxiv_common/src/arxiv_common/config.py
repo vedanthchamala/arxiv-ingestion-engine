@@ -28,6 +28,7 @@ class Settings:
     cache_distance: float = field(default_factory=lambda: float(_env("CACHE_DISTANCE", "0.12")))
     hnsw_ef_search: int = field(default_factory=lambda: int(_env("HNSW_EF_SEARCH", "200")))
     hybrid_search: bool = field(default_factory=lambda: _env("HYBRID_SEARCH", "true").lower() == "true")
+    watch_min_score: float = field(default_factory=lambda: float(_env("WATCH_MIN_SCORE", "0.55")))
     metrics_port: int = field(default_factory=lambda: int(_env("METRICS_PORT", "9103")))
     categories: tuple[str, ...] = field(
         default_factory=lambda: tuple(

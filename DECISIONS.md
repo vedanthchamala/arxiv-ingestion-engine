@@ -38,6 +38,7 @@ was made. "Superseded" entries are kept so the reasoning trail stays intact.
 | [31](#31-a-failed-page-keeps-the-pages-before-it-and-429-means-back-off) | A failed page keeps the pages before it; 429 means back off, not retry fast | accepted (amends 3, 11) |
 | [32](#32-a-server-rendered-web-ui-in-the-query-api) | Server-rendered web UI inside the query API; no JS build | accepted |
 | [33](#33-hybrid-search-keyword-and-vector-fused-by-rank) | Hybrid search: keyword + vector fused by rank; cache scoped by identifiers | accepted (amends 18, 21) |
+| [34](#34-watches-saved-searches-with-a-relevance-floor-and-atom-feeds) | Watches: saved searches with a relevance floor, "new since last visit", Atom feeds | accepted |
 
 ---
 
@@ -360,4 +361,20 @@ R@10 0.917 → 0.997, rewritten natural-language queries R@1 0.913 → 0.973, ca
 0.973, no per-query regression in either set, SQL latency unchanged (BENCHMARKS.md). Scores in a result
 list are no longer monotonic, since order is fused rank. A query that is an arXiv id or URL now opens
 that paper, and one that is exactly an author's name offers that author's page.
+
+## 34. Watches: saved searches with a relevance floor and Atom feeds
+**Date** 2026-10-19 · **Context** Daily use means "what is new in the topics I follow", not typing the
+same queries every morning. A plain top-k per saved query does not answer that: it always returns k
+papers, relevant or not, and on a quiet day it fills up with noise. A single cosine cut-off does not work
+either: on a week of papers, true hits for the short query `LoRA` score 0.49-0.54 while unrelated hits
+for `medieval poetry` score 0.37-0.44 and topical queries keep relevant papers from about 0.55 up.
+**Decision** A `watches` table (`sql/003_watches.sql`) stores the query, an optional category filter and
+the query's embedding, so a watch page or feed never calls the inference server. A watch shows the
+papers in a window (week by default) that the hybrid search (33) returns *and* that either matched on
+keywords or have a best chunk with cosine ≥ `WATCH_MIN_SCORE` (0.55). Papers ingested after the last
+visit to that watch are marked new and listed first; opening the watch updates `seen_at`. Each watch has
+an Atom feed (last 30 days) so any feed reader can be the notifier; no email or push. Form posts check
+`Origin`, since there is no login and a foreign page must not be able to edit watches. **Consequences**
+No new service or scheduler: matching happens at read time, in one SQL statement per watch (10-50 ms).
+"New" means new to this index, which is what a reader wants after the laptop was off for a day.
 

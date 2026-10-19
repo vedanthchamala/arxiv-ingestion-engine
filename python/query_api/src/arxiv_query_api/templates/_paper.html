@@ -2,6 +2,7 @@
 <article class="card">
   <div class="meta">
     <span class="cat" title="{{ category_name(p.primary_category) }}">{{ p.primary_category }}</span>
+    {% if new %}<span class="new">new</span>{% endif %}
     <time datetime="{{ p.published_at.isoformat() }}">{{ p.published_at | date }}</time>
     {% if p.score is defined %}<span class="score" title="cosine similarity of the best-matching passage">{{ "%.2f" | format(p.score) }}</span>{% endif %}
   </div>

@@ -156,6 +156,7 @@ class Hit:
     chunk_idx: int
     chunk_section: str | None
     chunk_text: str
+    keyword: bool = False
 
 
 def search(
@@ -198,6 +199,7 @@ def search(
             chunk_idx=r["idx"],
             chunk_section=r["section"],
             chunk_text=r["chunk_text"],
+            keyword=bool(r.get("keyword")),
         )
         for r in rows
     ]
@@ -272,7 +274,7 @@ def _hybrid_rows(conn, query_vec, text, k, categories, since, candidate_chunks):
             LIMIT %(kw)s
         ),
         fused AS (
-            SELECT arxiv_id, d.idx, d.section, d.text, d.score,
+            SELECT arxiv_id, d.idx, d.section, d.text, d.score, w.r IS NOT NULL AS keyword,
                    COALESCE(1.0 / (%(rrf)s + d.r), 0) + COALESCE(1.0 / (%(rrf)s + w.r), 0) AS rrf
             FROM dense d FULL JOIN keyword w USING (arxiv_id)
             ORDER BY rrf DESC, arxiv_id
@@ -280,7 +282,7 @@ def _hybrid_rows(conn, query_vec, text, k, categories, since, candidate_chunks):
         )
         SELECT f.arxiv_id, COALESCE(f.idx, c0.idx) AS idx, COALESCE(f.section, c0.section) AS section,
                COALESCE(f.text, c0.text) AS chunk_text,
-               COALESCE(f.score, 1 - (c0.embedding <=> %(q)s::vector)) AS score,
+               COALESCE(f.score, 1 - (c0.embedding <=> %(q)s::vector)) AS score, f.keyword,
                p.version, p.title, p.abstract, p.summary, p.primary_category, p.categories, p.published_at,
                {_AUTHORS}
         FROM fused f
@@ -379,3 +381,39 @@ def author_papers(conn: psycopg.Connection, author_id: int, limit: int = 100) ->
         """,
         (author_id, limit),
     ).fetchall()
+
+
+def create_watch(
+    conn: psycopg.Connection,
+    name: str,
+    query: str,
+    categories: Sequence[str] | None,
+    embedding: Sequence[float],
+) -> int:
+    return conn.execute(
+        "INSERT INTO watches (name, query, categories, embedding) VALUES (%s, %s, %s, %s) RETURNING id",
+        (name, query, list(categories) if categories else None, list(embedding)),
+    ).fetchone()["id"]
+
+
+def list_watches(conn: psycopg.Connection) -> list[dict]:
+    return conn.execute("SELECT * FROM watches ORDER BY created_at").fetchall()
+
+
+def get_watch(conn: psycopg.Connection, watch_id: int) -> dict | None:
+    return conn.execute("SELECT * FROM watches WHERE id = %s", (watch_id,)).fetchone()
+
+
+def delete_watch(conn: psycopg.Connection, watch_id: int) -> None:
+    conn.execute("DELETE FROM watches WHERE id = %s", (watch_id,))
+
+
+def mark_watch_seen(conn: psycopg.Connection, watch_id: int) -> None:
+    conn.execute("UPDATE watches SET seen_at = now() WHERE id = %s", (watch_id,))
+
+
+def ingested_at(conn: psycopg.Connection, arxiv_ids: Sequence[str]) -> dict[str, datetime]:
+    rows = conn.execute(
+        "SELECT arxiv_id, ingested_at FROM papers WHERE arxiv_id = ANY(%s)", (list(arxiv_ids),)
+    ).fetchall()
+    return {r["arxiv_id"]: r["ingested_at"] for r in rows}
