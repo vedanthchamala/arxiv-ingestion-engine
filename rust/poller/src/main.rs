@@ -184,6 +184,10 @@ fn describe_metrics() {
         "poller_papers_total",
         "Papers per category and result (produced|seen|invalid)"
     );
+    describe_counter!(
+        "poller_capped_total",
+        "Category walks that hit ARXIV_MAX_PAGES while still finding unseen papers (possible gap)"
+    );
     describe_gauge!(
         "poller_last_cycle_timestamp_seconds",
         Unit::Seconds,
@@ -195,6 +199,8 @@ fn describe_metrics() {
 async fn poll_category(ctx: &mut Ctx, category: &str) -> Result<CycleStats> {
     let mut stats = CycleStats::default();
     let mut start = 0usize;
+    let mut new_in_last_page = 0usize;
+    let mut oldest = None;
     while stats.pages < ctx.args.max_pages {
         let page = match fetch_page_with_retry(ctx, category, start).await {
             Ok(page) => page,
@@ -214,6 +220,10 @@ async fn poll_category(ctx: &mut Ctx, category: &str) -> Result<CycleStats> {
         let mut new_in_page = 0usize;
         for paper in page.entries {
             stats.fetched += 1;
+            oldest = Some(match oldest {
+                Some(o) if o < paper.updated_at => o,
+                _ => paper.updated_at,
+            });
             let member = paper.seen_member();
             let seen: bool = ctx
                 .redis
@@ -245,6 +255,7 @@ async fn poll_category(ctx: &mut Ctx, category: &str) -> Result<CycleStats> {
             stats.produced += 1;
             new_in_page += 1;
         }
+        new_in_last_page = new_in_page;
         if new_in_page == 0 {
             break;
         }
@@ -252,6 +263,18 @@ async fn poll_category(ctx: &mut Ctx, category: &str) -> Result<CycleStats> {
         if start >= page.total_results {
             break;
         }
+    }
+    if stats.pages >= ctx.args.max_pages && new_in_last_page > 0 {
+        // The walk stopped at the page cap, not at already-seen papers: anything older than this
+        // page (e.g. after days offline) is never polled. OAI-PMH backfill is the sanctioned fix.
+        let from = oldest.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default();
+        warn!(
+            category,
+            max_pages = ctx.args.max_pages,
+            oldest_polled = %from,
+            "page cap reached with unseen papers still coming; older papers may be missing: run scripts/backfill.py --from <last date you have> --until {from}"
+        );
+        counter!("poller_capped_total", "category" => category.to_string()).increment(1);
     }
     Ok(stats)
 }

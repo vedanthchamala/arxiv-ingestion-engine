@@ -14,12 +14,16 @@ for t in papers.new papers.chunked papers.failed; do
   fi
 done
 
+# The dead-letter topic exists to be replayed later (scripts/replay_dlq.py); the default 7-day
+# retention silently deleted it once already. It is tiny, so keep it forever.
+docker compose exec -T redpanda rpk topic alter-config papers.failed --set retention.ms=-1 >/dev/null && echo "retain  papers.failed forever"
+
 echo "--- consumer-lag metrics"
 docker compose exec -T redpanda rpk cluster config set enable_consumer_group_metrics '["group","partition","consumer_lag"]' >/dev/null && echo "enabled"
 
 echo "--- migrations"
 for f in sql/*.sql; do
-  docker compose exec -T postgres psql -q -v ON_ERROR_STOP=1 -U arxiv -d arxiv -f "/docker-entrypoint-initdb.d/$(basename "$f")"
+  docker compose exec -T -e PGOPTIONS="-c client_min_messages=warning" postgres psql -q -v ON_ERROR_STOP=1 -U arxiv -d arxiv -f "/docker-entrypoint-initdb.d/$(basename "$f")"
   echo "applied $f"
 done
 

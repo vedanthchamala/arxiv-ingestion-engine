@@ -22,6 +22,7 @@ Plan approved 2026-09-07. Last update: 2026-10-19.
 | 16. Web UI | **done** 2026-10-19 | server-rendered pages in the query API (decision 32): latest feed with category filter and paging, search with category/time filters and the matched passage, paper page with indexed sections and similar papers (chunk-0 vector, no inference call); `GET /papers/{id}/similar`. Against the live 10,394-paper DB with the cache off, warm medians: home 5 ms, search 34–44 ms, paper page 11 ms; checked in light, dark and at 375 px. 16 UI tests + 14 id-parser cases (65 Python tests) |
 | 17. Hybrid search, authors, id lookup | **done** 2026-10-19 | `sql/002_search.sql` (title+abstract `tsvector`, applied to the live DB in 1.8 s) and rank fusion in `db.search` (decision 33). `eval_search.py --mode` + two new query sets: name lookup R@10 0.917 → 0.997, LLM-rewritten queries R@1 0.913 → 0.973, precision@5 0.947 → 0.973, 0 per-query regressions, SQL p50 15 ms either way (BENCHMARKS.md). Cache scope keyed by identifier tokens. Pasting an arXiv id/URL opens the paper; author names link to `/author`; an exact author-name query offers the author page. 76 Python tests incl. a live hybrid check |
 | 18. Watches | **done** 2026-10-19 | `sql/003_watches.sql` and `/watches` (decision 34): save any search, per-watch matches in a week/month/year window with a keyword-or-cosine≥0.55 floor (measured on LoRA / topical / unrelated queries), new-since-last-visit marking, Atom feed per watch, `Origin` check on posts. Live: 3 watches on the 10k-paper DB render in 10-50 ms; back-dating one watch's `seen_at` showed 13 new, cleared after opening it; a cross-origin post got 403. 15 watch tests (91 Python tests) |
+| 19. One-command setup and operability | **done** 2026-10-19 | `scripts/quickstart.sh` (decision 35): `--no-ingest` run on the live stack took 58 s to a searchable UI in containers reaching host Ollama, 0 restarts; refuses while host-side processes run. Poller warns and counts `poller_capped_total` when it hits the page cap with unseen papers left (decision 36). DLQ found empty: Redpanda's default 7-day retention had deleted all 42 records, including the five NUL papers; `dev.sh` now keeps `papers.failed` forever (applied to the live topic). `scripts/replay_dlq.py` verified on throwaway topics: latest failure per paper, resolved papers skipped, raw/invalid payloads listed only, `chunked` → `papers.chunked`, `paper` → `papers.new`. Summary prompt with a worked example: "The paper …" openers 8/8 → 0/24, 65 → 41 words, 0 leaked example details (new summaries only) |
 
 ## Live run log
 | When | What |
@@ -44,12 +45,12 @@ Append a row with `scripts/snapshot.sh`.
 
 ## Known gaps / next
 - PDF section detection is coarse (usually one "Body" section) because `pdftotext` reflow merges heading lines; HTML papers get real sections. Improve with `-layout` parsing or `pdfplumber` if it matters.
-- Summary prompt still yields "The paper …" openers; tighten if desired.
+- Summaries written before 2026-10-19 keep the old "The paper …" style; only new ones use the tightened prompt.
 - Retrieval eval is self-retrieval, name lookup, LLM-rewritten queries and category precision, not a human-labelled relevance set.
 - **arXiv 429s.** From 2026-09-11 17:20 UTC the export API rejects most requests with 429 even though the shared budget keeps us at one request per 3.05 s; a probe through the same budget got 429 in 0.3 s. Cause unknown (possibly a longer-window quota tripped by the 8,348-request full-text run). The poller now backs off 30/60/120/240 s on 429 and counts them as `outcome="throttled"`; a cool-down experiment (pause polling for hours, then resume) is the next step.
 - No auth or TLS on the query API.
 - Full-text worker throughput on the laptop (~6 s/paper with local summaries) is below the fetcher's (~4.7 s/paper); a second laptop worker made Ollama stall, so keeping up on a big day needs the Spark vLLM servers.
-- Five papers are dead-lettered with NUL bytes in their text; the fix is in, they can be replayed from `papers.failed`.
+- Five papers dead-lettered with NUL bytes (2503.01450, 2602.14255, 2609.06870, 2609.07610, 2609.11867) lost their DLQ records to the old 7-day retention; they are stored abstract-only and need a re-fetch for full text.
 
 ## Tests
 ```

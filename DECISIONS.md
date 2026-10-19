@@ -39,6 +39,8 @@ was made. "Superseded" entries are kept so the reasoning trail stays intact.
 | [32](#32-a-server-rendered-web-ui-in-the-query-api) | Server-rendered web UI inside the query API; no JS build | accepted |
 | [33](#33-hybrid-search-keyword-and-vector-fused-by-rank) | Hybrid search: keyword + vector fused by rank; cache scoped by identifiers | accepted (amends 18, 21) |
 | [34](#34-watches-saved-searches-with-a-relevance-floor-and-atom-feeds) | Watches: saved searches with a relevance floor, "new since last visit", Atom feeds | accepted |
+| [35](#35-one-command-setup-containers-plus-the-hosts-ollama) | One-command setup: containers plus the host's Ollama | accepted (amends 29) |
+| [36](#36-gaps-are-reported-and-dead-letters-are-kept) | Poller reports page-cap gaps; the dead-letter topic is kept forever | accepted (amends 3, 11) |
 
 ---
 
@@ -377,4 +379,36 @@ an Atom feed (last 30 days) so any feed reader can be the notifier; no email or 
 `Origin`, since there is no login and a foreign page must not be able to edit watches. **Consequences**
 No new service or scheduler: matching happens at read time, in one SQL statement per watch (10-50 ms).
 "New" means new to this index, which is what a reader wants after the laptop was off for a day.
+
+## 35. One-command setup: containers plus the host's Ollama
+**Date** 2026-10-19 · **Context** Running the system meant Rust, uv, Docker and Ollama on the host,
+five processes and an `.env` whose `localhost` URLs are wrong inside containers (29). Someone cloning
+the repo should get a working UI from one command. **Decision** `scripts/quickstart.sh` checks Docker and
+Ollama, pulls the two models (`--no-summaries` skips the 4.7 GB one), runs `dev.sh` (infra, topics,
+migrations), then builds and starts the five services from the `pipeline` profile and waits for the
+API. Ollama stays on the host, where it has the GPU or Metal; inference URLs that point at `localhost`
+are rewritten to `host.docker.internal` for the containers, while a remote server named in `.env` (the
+Spark) is kept. It refuses to run while the host-side pipeline (`scripts/run.sh`) is up, because two
+fetchers would break decision 2. `--no-ingest` starts only the API and workers: the UI over an existing
+database with no arXiv traffic. **Consequences** Prerequisites are Docker and Ollama only. Measured: 58 s
+from `--no-ingest` to a searchable UI on the existing 10k-paper database with warm images; the
+containers reached host Ollama and answered searches. On Linux, Ollama must listen on `0.0.0.0` to be
+reachable from the Docker bridge; the script says so when it cannot reach it.
+
+## 36. Gaps are reported, and dead letters are kept
+**Date** 2026-10-19 · **Context** Two silent failures came from time rather than code. The poller walks
+newest-first until a page brings nothing new, but stops at `ARXIV_MAX_PAGES` (10 × 200); after days
+offline it reaches that cap with unseen papers still coming, and everything older is never polled.
+And `papers.failed` used Redpanda's default 7-day retention, so by 2026-10-19 every dead letter,
+including the five NUL-byte papers decision 11 promised could be replayed, had been deleted.
+**Decision** When the walk ends at the page cap while its last page still had unseen papers, the poller
+logs a warning naming the oldest date it reached and the `scripts/backfill.py` command that closes the
+gap, and counts `poller_capped_total{category}`. `dev.sh` sets `retention.ms=-1` on `papers.failed`
+(creating or altering it). `scripts/replay_dlq.py` reads the whole DLQ without a consumer group, keeps
+the latest failure per paper, skips papers the database has since stored properly, and re-queues the
+rest on the topic they failed on (`chunked` payloads to `papers.chunked`, `paper` payloads to
+`papers.new`); it lists by default and produces only with `--apply`. **Consequences** A gap is visible
+the cycle it happens, and the fix is in the log line. The DLQ grows without bound, but it held 42
+records after a month of operation. The five lost papers are still searchable by abstract, and their
+ids are in `data/logs/worker.log` for a re-fetch.
 

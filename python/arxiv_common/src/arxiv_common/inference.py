@@ -11,10 +11,17 @@ from .text import l2_normalize
 
 log = structlog.get_logger()
 
+# The worked example matters: without it qwen2.5-7b opened 8 of 8 summaries with "The paper ...";
+# with it, 1 of 16, and length fell from 65 to 40 words on average.
 SUMMARY_SYSTEM = (
-    "You summarize machine learning, computer vision and robotics papers for researchers skimming "
-    "a feed. Write 2-3 plain sentences: what problem, what method, what result. No preamble, no "
-    "bullet points, no hedging, no mention of 'this paper'."
+    "You summarize machine learning, computer vision and robotics papers for researchers skimming a feed. "
+    "Write two or three plain sentences, at most 70 words in total: the problem, the method (by name if it "
+    "has one) and the main result, with a number if the abstract gives one. Start with the method's name or "
+    "the problem, never with 'The paper', 'This paper' or 'The authors'. No preamble, no bullet points, no "
+    "hedging.\n\n"
+    'Example of the style: "FlowBot learns articulated-object manipulation from 3D flow predicted on point '
+    "clouds, avoiding per-object demonstrations. A single policy trained in simulation opens unseen drawers "
+    'and doors on a real robot, succeeding in 78% of trials versus 41% for the best imitation baseline."'
 )
 
 
