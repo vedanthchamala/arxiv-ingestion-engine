@@ -6,7 +6,9 @@
     {% for c in paper.categories %}<span class="cat{% if c == paper.primary_category %} primary{% endif %}" title="{{ category_name(c) }}">{{ c }}</span>{% endfor %}
   </div>
   <h1>{{ paper.title }}</h1>
-  <p class="authors">{{ paper.authors | join(", ") }}</p>
+  <p class="authors">
+    {%- for a in paper.authors %}<a href="/author?name={{ a | urlencode }}">{{ a }}</a>{{ ", " if not loop.last }}{% endfor -%}
+  </p>
   <p class="dates">
     {{ paper.arxiv_id }}v{{ paper.version }} · published {{ paper.published_at | date }}
     {% if paper.updated_at and paper.updated_at.date() != paper.published_at.date() %}· updated {{ paper.updated_at | date }}{% endif %}

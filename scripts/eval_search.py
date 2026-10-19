@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Retrieval-quality evaluation of pgvector search, bypassing the API and its semantic cache.
 
-    uv run --project python python scripts/eval_search.py [--n 500] [--paraphrase-n 200] [--seed 42] [--k 10]
+    uv run --project python python scripts/eval_search.py [--mode hybrid] [--n 500] [--seed 42]
 
 Self-retrieval (title -> own paper, unfiltered and filtered to the paper's primary category), paraphrase
-robustness (first abstract sentence -> own paper), category precision@5 on a fixed query set, and raw
-embedding / SQL latency. Prints markdown tables to stdout; writes data/eval_search.json.
+robustness (first abstract sentence -> own paper), name lookup (the "Name" of a "Name: ..." title -> own
+paper), category precision@5 on a fixed query set, and raw embedding / SQL latency. `--mode dense` is
+vector search alone, `hybrid` fuses it with keyword search as the API does. Prints markdown tables to
+stdout; writes data/eval_search.json.
 """
 
 import argparse
@@ -46,6 +48,13 @@ CATEGORY_QUERIES = [
 ]
 
 _SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9(])")
+_TITLE_NAME = re.compile(r"^([A-Za-z0-9][\w+\-.]{2,30})\s*:\s")
+
+
+def title_name(title: str) -> str | None:
+    """`CGS-SLAM` from "CGS-SLAM: Collaborative ...": the coined name a reader would search for."""
+    m = _TITLE_NAME.match(title)
+    return m.group(1) if m else None
 
 
 def first_sentence(abstract: str, min_chars: int = 40, max_chars: int = 300) -> str:
@@ -55,6 +64,29 @@ def first_sentence(abstract: str, min_chars: int = 40, max_chars: int = 300) -> 
         if len(out) >= min_chars:
             break
     return out[:max_chars]
+
+
+REWRITE_PROMPT = (
+    "Write the search query a researcher would type to find this paper: 5 to 12 words, describing "
+    "the problem and approach in your own words. Do not use the paper's coined names, acronyms or "
+    "any distinctive words from its title. Reply with the query only."
+)
+
+
+def rewrite_query(llm: InferenceClient, title: str, abstract: str) -> str:
+    body = {
+        "model": llm.settings.llm_model,
+        "messages": [
+            {"role": "system", "content": REWRITE_PROMPT},
+            {"role": "user", "content": f"Title: {title}\n\nAbstract: {abstract}"},
+        ],
+        "max_tokens": 40,
+        "temperature": 0,
+    }
+    resp = llm._llm.post("/chat/completions", json=body)
+    resp.raise_for_status()
+    text = resp.json()["choices"][0]["message"]["content"].strip()
+    return re.sub(r"^(search )?query:\s*", "", text, flags=re.IGNORECASE).strip().strip('"')
 
 
 def pct(xs: list[float], p: float) -> float | None:
@@ -122,6 +154,15 @@ def main() -> None:
     ap.add_argument("--n", type=int, default=500, help="papers sampled for self-retrieval")
     ap.add_argument("--paraphrase-n", type=int, default=200, help="subset of the sample used for paraphrase")
     ap.add_argument("--k", type=int, default=10)
+    ap.add_argument("--mode", choices=["dense", "hybrid"], default="dense")
+    ap.add_argument("--name-n", type=int, default=300, help="papers sampled for name lookup")
+    ap.add_argument(
+        "--rewrite-n",
+        type=int,
+        default=0,
+        help="papers for LLM-rewritten queries (cached in --rewrites, so modes share one query set)",
+    )
+    ap.add_argument("--rewrites", type=Path, default=Path("data/eval_rewrites.json"))
     ap.add_argument("--ef-search", type=int, default=None, help="pgvector hnsw.ef_search for the run")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--database-url", default=defaults.database_url)
@@ -148,11 +189,14 @@ def main() -> None:
     sql_ms: list[float] = []
     sql_filtered_ms: list[float] = []
 
+    def lexical(text: str) -> str | None:
+        return text if args.mode == "hybrid" else None
+
     def timed_search(text: str, k: int, categories: list[str] | None = None):
         t0 = time.perf_counter()
         vec = client.embed([text])[0]
         t1 = time.perf_counter()
-        hits = db.search(conn, vec, k=k, categories=categories, ef_search=args.ef_search)
+        hits = db.search(conn, vec, k=k, categories=categories, ef_search=args.ef_search, text=lexical(text))
         t2 = time.perf_counter()
         embed_ms.append((t1 - t0) * 1000)
         (sql_filtered_ms if categories else sql_ms).append((t2 - t1) * 1000)
@@ -163,7 +207,14 @@ def main() -> None:
     for p in sample:
         vec, hits = timed_search(p["title"], args.k)
         t0 = time.perf_counter()
-        hits_f = db.search(conn, vec, k=args.k, categories=[p["primary_category"]], ef_search=args.ef_search)
+        hits_f = db.search(
+            conn,
+            vec,
+            k=args.k,
+            categories=[p["primary_category"]],
+            ef_search=args.ef_search,
+            text=lexical(p["title"]),
+        )
         sql_filtered_ms.append((time.perf_counter() - t0) * 1000)
         self_rows.append(
             {
@@ -184,6 +235,42 @@ def main() -> None:
         para_rows.append({"arxiv_id": p["arxiv_id"], "query": query, "rank": rank_of(hits, p["arxiv_id"])})
     log(f"paraphrase done in {time.perf_counter() - t_phase:.0f}s")
 
+    t_phase = time.perf_counter()
+    names: dict[str, list[str]] = {}
+    for p in papers:
+        name = title_name(p["title"])
+        if name:
+            names.setdefault(name.casefold(), []).append(p["arxiv_id"])
+    unique = sorted(
+        (title_name(p["title"]), p["arxiv_id"])
+        for p in papers
+        if title_name(p["title"]) and len(names[title_name(p["title"]).casefold()]) == 1
+    )
+    name_sample = random.Random(args.seed).sample(unique, min(args.name_n, len(unique)))
+    name_rows = []
+    for name, arxiv_id in name_sample:
+        _, hits = timed_search(name, args.k)
+        name_rows.append({"arxiv_id": arxiv_id, "query": name, "rank": rank_of(hits, arxiv_id)})
+    log(f"name lookup done in {time.perf_counter() - t_phase:.0f}s ({len(unique)} unambiguous names)")
+
+    rewrite_rows = []
+    if args.rewrite_n:
+        t_phase = time.perf_counter()
+        cached = json.loads(args.rewrites.read_text()) if args.rewrites.exists() else {}
+        llm = InferenceClient(Settings(), timeout_s=120)
+        for p in sample[: args.rewrite_n]:
+            if p["arxiv_id"] not in cached:
+                cached[p["arxiv_id"]] = rewrite_query(llm, p["title"], p["abstract"])
+            query = cached[p["arxiv_id"]]
+            _, hits = timed_search(query, args.k)
+            rewrite_rows.append(
+                {"arxiv_id": p["arxiv_id"], "query": query, "rank": rank_of(hits, p["arxiv_id"])}
+            )
+        llm.close()
+        args.rewrites.parent.mkdir(parents=True, exist_ok=True)
+        args.rewrites.write_text(json.dumps(cached, indent=1, sort_keys=True))
+        log(f"rewritten queries done in {time.perf_counter() - t_phase:.0f}s")
+
     cat_rows = []
     for query, expected in CATEGORY_QUERIES:
         _, hits = timed_search(query, 5)
@@ -203,6 +290,8 @@ def main() -> None:
     self_unf = retrieval_metrics([r["rank"] for r in self_rows], args.k)
     self_fil = retrieval_metrics([r["rank_filtered"] for r in self_rows], args.k)
     para = retrieval_metrics([r["rank"] for r in para_rows], args.k)
+    name_m = retrieval_metrics([r["rank"] for r in name_rows], args.k)
+    rewrite_m = retrieval_metrics([r["rank"] for r in rewrite_rows], args.k) if rewrite_rows else None
     short_filtered = sum(r["n_hits_filtered"] < args.k for r in self_rows)
     cat_mean = statistics.fmean(r["precision"] for r in cat_rows)
     latency = {
@@ -215,7 +304,7 @@ def main() -> None:
     lines = [
         f"Corpus: {info['papers']} papers, {info['chunks']} chunks ({info['abstract_only']} abstract-only); "
         f"pgvector {info['pgvector']}, hnsw.ef_search={info['hnsw_ef_search']}; "
-        f"embeddings {args.embedding_model} via {args.embedding_url}; seed={args.seed}",
+        f"embeddings {args.embedding_model} via {args.embedding_url}; mode={args.mode}; seed={args.seed}",
         "",
         f"### Self-retrieval (paper title -> its own paper), n={self_unf['n']}, k={args.k}",
         "",
@@ -237,6 +326,26 @@ def main() -> None:
         "|---|---|---|---|---|",
         f"| unfiltered | {fmt(para['recall@1'])} | {fmt(para['recall@5'])} | "
         f"{fmt(para[f'recall@{args.k}'])} | {fmt(para['mrr'])} |",
+        "",
+        f"### Name lookup (the name of a `Name: ...` title -> its own paper), n={name_m['n']}, k={args.k}",
+        "",
+        f"| Setting | Recall@1 | Recall@5 | {rk} | MRR |",
+        "|---|---|---|---|---|",
+        f"| unfiltered | {fmt(name_m['recall@1'])} | {fmt(name_m['recall@5'])} | "
+        f"{fmt(name_m[f'recall@{args.k}'])} | {fmt(name_m['mrr'])} |",
+    ]
+    if rewrite_m:
+        lines += [
+            "",
+            f"### Rewritten query (LLM-written search for the paper, no title words) -> its own paper, "
+            f"n={rewrite_m['n']}, k={args.k}",
+            "",
+            f"| Setting | Recall@1 | Recall@5 | {rk} | MRR |",
+            "|---|---|---|---|---|",
+            f"| unfiltered | {fmt(rewrite_m['recall@1'])} | {fmt(rewrite_m['recall@5'])} | "
+            f"{fmt(rewrite_m[f'recall@{args.k}'])} | {fmt(rewrite_m['mrr'])} |",
+        ]
+    lines += [
         "",
         "### Category precision@5 (unfiltered; hit counts if its `categories` contain the expected one)",
         "",
@@ -268,16 +377,21 @@ def main() -> None:
             "paraphrase_n": args.paraphrase_n,
             "k": args.k,
             "seed": args.seed,
+            "mode": args.mode,
             "embedding_url": args.embedding_url,
             "embedding_model": args.embedding_model,
         },
         "corpus": info,
         "self_retrieval": {"unfiltered": self_unf, "filtered": self_fil, "short_filtered": short_filtered},
         "paraphrase": para,
+        "name_lookup": name_m,
+        "rewritten": rewrite_m,
         "category_precision": {"mean": cat_mean, "queries": cat_rows},
         "latency_ms": latency,
         "self_rows": self_rows,
         "paraphrase_rows": para_rows,
+        "name_rows": name_rows,
+        "rewrite_rows": rewrite_rows,
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=1, default=str))

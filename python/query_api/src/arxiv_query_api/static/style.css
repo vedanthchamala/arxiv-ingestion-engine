@@ -201,3 +201,15 @@ fieldset { border: 0; margin: 0; padding: 0; }
   .bar button { padding: 12px 14px; }
   .score { margin-left: 0; }
 }
+
+.authors a { color: inherit; }
+.authors a:hover { color: var(--accent); }
+.author-hit {
+  display: block;
+  margin: 4px 0 6px;
+  padding: 10px 14px;
+  font-size: 0.92rem;
+  background: var(--accent-soft);
+  border-radius: 8px;
+}
+.page-title { margin: 6px 0 4px; font: 600 1.6rem/1.25 var(--serif); letter-spacing: -0.015em; }

@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from prometheus_client import REGISTRY
 
 from arxiv_common import db
-from arxiv_query_api.cache import scope_key
+from arxiv_query_api.cache import identifiers, scope_key
 from arxiv_query_api.main import app, state
 
 VEC = [0.03125] * 1024
@@ -105,7 +105,8 @@ def test_post_search_returns_hits_with_expected_shape(client, search):
     assert body["hits"][0]["published_at"].startswith("2026-09-01T00:00:00")
     state.inference.embed.assert_called_once_with(["diffusion policy"])
     args, kwargs = search.call_args
-    assert args == (CONN, VEC) and kwargs == {"k": 3, "categories": None, "since": None, "ef_search": 200}
+    assert args == (CONN, VEC)
+    assert kwargs == {"k": 3, "categories": None, "since": None, "ef_search": 200, "text": "diffusion policy"}
 
 
 def test_get_search_passes_filters_to_db(client, search):
@@ -123,12 +124,29 @@ def test_get_search_passes_filters_to_db(client, search):
         "categories": ["cs.RO", "cs.LG"],
         "since": datetime(2026, 9, 1, tzinfo=UTC),
         "ef_search": 200,
+        "text": "grasping",
     }
 
 
 def test_get_search_single_category(client, search):
     assert client.get("/search", params={"q": "grasping", "category": "cs.RO"}).status_code == 200
-    assert search.call_args.kwargs == {"k": 10, "categories": ["cs.RO"], "since": None, "ef_search": 200}
+    assert search.call_args.kwargs == {
+        "k": 10,
+        "categories": ["cs.RO"],
+        "since": None,
+        "ef_search": 200,
+        "text": "grasping",
+    }
+
+
+def test_hybrid_can_be_switched_off(client, search):
+    state.hybrid = False
+    try:
+        client.post("/search", json={"query": "grasping"})
+    finally:
+        state.hybrid = True
+
+    assert search.call_args.kwargs["text"] is None
 
 
 @pytest.mark.parametrize("body", [{}, {"query": ""}, {"query": "x", "k": 0}, {"query": "x", "k": 51}])
@@ -171,7 +189,7 @@ def test_cache_miss_stores_response(client, search):
     search.assert_called_once()
     [(query, scope, response)] = state.cache.puts
     assert query == "diffusion policy"
-    assert scope == scope_key(3, ["cs.RO", "cs.LG"], None)
+    assert scope == scope_key(3, ["cs.RO", "cs.LG"], None, "diffusion policy")
     assert [h["arxiv_id"] for h in response["hits"]] == ["2609.00001", "2609.00002", "2609.00003"]
     assert sample("api_cache_events_total", result="miss") == misses_before + 1
 
@@ -187,6 +205,18 @@ def test_scope_key_depends_only_on_filters():
     assert scope_key(10, ["cs.LG", "cs.RO"], None) != base
     assert scope_key(10, ["cs.LG", "cs.RO"], datetime(2026, 9, 2, tzinfo=UTC)) != base
     assert scope_key(10, None, None) == scope_key(10, [], None)
+
+
+def test_scope_key_separates_exact_identifiers():
+    def same(a: str, b: str) -> bool:
+        return scope_key(10, None, None, a) == scope_key(10, None, None, b)
+
+    assert same("diffusion policy", "diffusion policies for robots")
+    assert same("SAM 2 segmentation", "segmentation with SAM 2")
+    assert not same("SAM 2 segmentation", "SAM 3 segmentation")
+    assert not same("LoRA fine-tuning", "QLoRA fine-tuning")
+    assert not same("pi0 vla", "pi0.5 vla")
+    assert identifiers("YOLOv8 and 3DGS on GPT-4, plain words") == ["3DGS", "GPT-4", "YOLOv8"]
 
 
 def test_metrics_endpoint_exposes_api_metrics(client):

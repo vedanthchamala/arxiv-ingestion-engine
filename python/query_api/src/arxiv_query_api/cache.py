@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+import re
 from collections.abc import Callable, Sequence
 from datetime import datetime
 
@@ -14,9 +15,24 @@ from redisvl.utils.vectorize import CustomTextVectorizer
 log = structlog.get_logger()
 
 
-def scope_key(k: int, categories: Sequence[str] | None, since: datetime | None) -> str:
-    """Results depend on the filters, so the cache only matches within the same scope."""
-    raw = f"k={k}|cats={sorted(categories or [])}|since={since.isoformat() if since else ''}"
+_TOKEN = re.compile(r"[\w.+-]+")
+
+
+def identifiers(query: str) -> list[str]:
+    """Tokens with a digit or an inner capital (`SAM`, `3DGS`, `pi0.5`, `LoRA`): names the keyword side
+    of search matches exactly, and which the embedding barely separates (`SAM 2` vs `SAM 3` is 0.13)."""
+    return sorted(
+        {t for t in _TOKEN.findall(query) if any(c.isdigit() for c in t) or any(c.isupper() for c in t[1:])}
+    )
+
+
+def scope_key(k: int, categories: Sequence[str] | None, since: datetime | None, query: str = "") -> str:
+    """Results depend on the filters and on any exact identifiers, so the cache only matches within
+    the same scope; paraphrases in plain words still share one."""
+    raw = (
+        f"k={k}|cats={sorted(categories or [])}|since={since.isoformat() if since else ''}"
+        f"|ids={identifiers(query)}"
+    )
     return hashlib.sha1(raw.encode()).hexdigest()[:16]
 
 

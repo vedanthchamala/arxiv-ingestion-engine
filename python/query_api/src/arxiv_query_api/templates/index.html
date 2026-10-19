@@ -4,7 +4,7 @@
 <form class="search" action="/" method="get" role="search">
   <div class="bar">
     <input type="search" name="q" value="{{ q }}" aria-label="Search papers"
-           placeholder="Search by meaning, e.g. diffusion policy for robot manipulation" {% if not q %}autofocus{% endif %}>
+           placeholder="Search by topic, name, author or arXiv id" {% if not q %}autofocus{% endif %}>
     <button type="submit">Search</button>
   </div>
   <div class="filters">
@@ -39,6 +39,11 @@
 <p class="count">
   {{ resp.hits | length }} result{{ "" if resp.hits | length == 1 else "s" }} · {{ resp.took_ms }} ms{% if resp.cached %} · from cache{% endif %}
 </p>
+{% if author %}
+<a class="author-hit" href="/author?name={{ author.name | urlencode }}">
+  {{ author.papers }} paper{{ "" if author.papers == 1 else "s" }} by <b>{{ author.name }}</b> →
+</a>
+{% endif %}
 {% for p in resp.hits %}{% include "_paper.html" %}{% endfor %}
 {% if not resp.hits %}<p class="empty">Nothing matched. Try fewer filters or other words.</p>{% endif %}
 {% if not more and resp.hits | length == k %}

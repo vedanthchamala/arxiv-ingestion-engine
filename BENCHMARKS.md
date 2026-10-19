@@ -176,12 +176,40 @@ abstract chunk; precision@5 is 0.960 (was 0.987).
 Cold search got faster with 38× more chunks (74 → 58 ms p50) because the index replaced the sequential
 scan. The throughput ceiling is unchanged and is still Ollama's embedding rate on the laptop.
 
+## Hybrid search: keyword + vector (2026-10-19)
+
+Corpus **10,394 papers, 309,408 chunks**, `ef_search` 200, same seed and samples as above, `eval_search.py
+--mode dense|hybrid`. Hybrid fuses the dense ranking with a Postgres full-text ranking of title (weight A)
++ abstract (weight B) by reciprocal rank fusion (k = 60, 50 keyword candidates); decision 33. Two new
+query sets: **name lookup** (the coined name of a `Name: ...` title, e.g. `CGS-SLAM`, alone; 3,441
+unambiguous names in the corpus, 300 sampled) and **rewritten** (qwen2.5-7b writes the 5-12-word search
+a researcher would type, told to avoid the title's distinctive words; 150, cached in
+`data/eval_rewrites.json` so both modes see the same queries).
+
+| Query set | Dense R@1 | R@10 | Hybrid R@1 | R@10 | Hybrid better / worse (per query) |
+|---|---|---|---|---|---|
+| Name lookup, n=300 | 0.890 | 0.917 | **0.947** | **0.997** | 29 / 0 |
+| Rewritten, n=150 | 0.913 | 0.973 | **0.973** | **0.980** | 9 / 0 |
+| Title, n=500 | 0.994 | 0.996 | 1.000 | 1.000 | |
+| First abstract sentence, n=200 | 0.695 | 0.880 | 0.955 | 1.000 | |
+| Category precision@5, 15 topical queries | 0.947 | | **0.973** | | |
+| SQL p50 / p95 unfiltered | 15.1 / 25.4 ms | | 15.4 / 18.0 ms | | |
+
+Read the title and first-sentence rows with care: those queries are copied verbatim from the indexed
+text, so the keyword side matches them trivially and the gain overstates what a person sees. The name,
+rewritten and category rows are the honest ones, and they all improve with no per-query regression. Some
+rewrites still kept a quoted phrase from the abstract, which favours the keyword side somewhat. The
+semantic cache now scopes entries by the query's identifier tokens (digits or inner capitals), because
+`SAM 2` / `SAM 3`, `LoRA` / `QLoRA` and `GPT-4` / `GPT-5` sit at cosine distance 0.123-0.166 under bge-m3,
+just outside the 0.12 hit threshold; plain-word paraphrases (`diffusion policy` / `diffusion policies for
+robots`, 0.068) still share an entry.
+
 ## How to reproduce
 
 ```
 docker compose up -d && ollama serve                     # Postgres/pgvector, Redis, Redpanda; Ollama with `ollama pull bge-m3`
 uv run --project python python -m uvicorn arxiv_query_api.main:app --port 8001   # query API on Ollama defaults, if none is running (do not source .env: it points at the Spark)
-uv run --project python python scripts/eval_search.py --n 500 --paraphrase-n 200 --seed 42 [--ef-search 200]   # -> data/eval_search.json
+uv run --project python python scripts/eval_search.py --n 500 --paraphrase-n 200 --seed 42 [--ef-search 200] [--mode hybrid --rewrite-n 150]   # -> data/eval_search.json
 uv run --project python python scripts/bench_api.py --base-url http://127.0.0.1:8001 --duration 20 --concurrency 8,32   # -> data/bench_api.json
 uv run --project python ruff check --config python/pyproject.toml scripts/
 ```

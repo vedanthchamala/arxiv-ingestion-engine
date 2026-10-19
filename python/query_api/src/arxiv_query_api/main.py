@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
+import structlog
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.staticfiles import StaticFiles
@@ -34,6 +35,12 @@ async def lifespan(_app: FastAPI):
         open=True,
     )
     state.inference = InferenceClient(settings, timeout_s=60)
+    with state.pool.connection() as conn:
+        state.hybrid = settings.hybrid_search and db.has_keyword_index(conn)
+    if settings.hybrid_search and not state.hybrid:
+        structlog.get_logger().warning(
+            "papers.tsv missing; vector-only search until scripts/dev.sh applies sql/002_search.sql"
+        )
     if settings.cache_enabled:
         state.cache = SearchCache(
             settings.redis_url,

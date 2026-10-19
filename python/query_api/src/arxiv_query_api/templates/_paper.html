@@ -6,7 +6,10 @@
     {% if p.score is defined %}<span class="score" title="cosine similarity of the best-matching passage">{{ "%.2f" | format(p.score) }}</span>{% endif %}
   </div>
   <h3><a href="/paper/{{ p.arxiv_id }}">{{ p.title }}</a></h3>
-  <p class="authors">{{ p.authors | authors }}</p>
+  <p class="authors">
+    {%- for a in p.authors[:6] %}<a href="/author?name={{ a | urlencode }}">{{ a }}</a>{{ ", " if not loop.last }}{% endfor %}
+    {%- if p.authors | length > 6 %} +{{ p.authors | length - 6 }} more{% endif -%}
+  </p>
   {% if p.summary %}
   <p class="summary">{{ p.summary }}</p>
   {% else %}

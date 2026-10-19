@@ -213,6 +213,8 @@ services:
     environment:
       <<: [*pipeline-env, *inference-env]
       ARXIV_CATEGORIES: ${ARXIV_CATEGORIES:-cs.LG,cs.CV,cs.RO}   # filter chips in the web UI
+      HYBRID_SEARCH: ${HYBRID_SEARCH:-true}
+      HNSW_EF_SEARCH: ${HNSW_EF_SEARCH:-200}
     ports:
       - "${API_PORT:-8000}:8000"   # host port is overridable: API_PORT=8001 in .env
     depends_on:

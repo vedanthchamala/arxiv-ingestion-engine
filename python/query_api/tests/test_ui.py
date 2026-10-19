@@ -76,6 +76,10 @@ def dbm() -> Iterator[SimpleNamespace]:
         patch.object(db, "get_paper", return_value=row(1)) as get_paper,
         patch.object(db, "sections", return_value=["1 Introduction", "3 Method"]) as sections,
         patch.object(db, "paper_vector", return_value=VEC) as paper_vector,
+        patch.object(db, "find_author", return_value=None) as find_author,
+        patch.object(
+            db, "author_papers", return_value=[row(3, authors=["Ada Lovelace", "Alan Turing"])]
+        ) as author_papers,
     ):
         yield SimpleNamespace(
             stats=stats,
@@ -84,6 +88,8 @@ def dbm() -> Iterator[SimpleNamespace]:
             get_paper=get_paper,
             sections=sections,
             paper_vector=paper_vector,
+            find_author=find_author,
+            author_papers=author_papers,
         )
 
 
@@ -239,3 +245,52 @@ def test_static_stylesheet_is_served(client):
 
     assert r.status_code == 200
     assert "prefers-color-scheme" in r.text
+
+
+@pytest.mark.parametrize("q", ["2609.00001", "2609.00001v2", "https://arxiv.org/pdf/2609.00001v2"])
+def test_search_box_jumps_to_a_pasted_arxiv_id(client, dbm, q):
+    r = client.get("/", params={"q": q}, follow_redirects=False)
+
+    assert r.status_code == 303
+    assert r.headers["location"] == "/paper/2609.00001"
+    state.inference.embed.assert_not_called()
+
+
+def test_search_offers_author_page_for_an_exact_name(client, dbm):
+    dbm.find_author.return_value = {"id": 7, "name": "Ada Lovelace", "papers": 4}
+
+    r = client.get("/", params={"q": "ada lovelace"})
+
+    dbm.find_author.assert_called_once_with(CONN, "ada lovelace")
+    assert "4 papers by <b>Ada Lovelace</b>" in r.text
+    assert 'href="/author?name=Ada%20Lovelace"' in r.text
+
+
+def test_search_skips_author_lookup_for_long_queries(client, dbm):
+    client.get("/", params={"q": "diffusion policy for robot manipulation"})
+
+    dbm.find_author.assert_not_called()
+
+
+def test_author_names_link_to_author_pages(client):
+    r = client.get("/")
+
+    assert '<a href="/author?name=Ada%20Lovelace">Ada Lovelace</a>' in r.text
+
+
+def test_author_page(client, dbm):
+    dbm.find_author.return_value = {"id": 7, "name": "Ada Lovelace", "papers": 1}
+
+    r = client.get("/author", params={"name": "Ada Lovelace"})
+
+    assert r.status_code == 200
+    assert "Paper 3" in r.text and "Alan Turing" in r.text
+    dbm.author_papers.assert_called_once_with(CONN, 7)
+
+
+def test_author_page_unknown(client, dbm):
+    r = client.get("/author", params={"name": "Nobody Here"})
+
+    assert r.status_code == 404
+    assert "No author named" in r.text
+    dbm.author_papers.assert_not_called()

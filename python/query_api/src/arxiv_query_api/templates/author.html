@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}{{ author.name if author else name }} · arXiv search{% endblock %}
+{% block content %}
+{% if author %}
+<h1 class="page-title">{{ author.name }}</h1>
+<p class="fine">{{ author.papers }} paper{{ "" if author.papers == 1 else "s" }} in the local index, newest first.</p>
+{% for p in papers %}{% include "_paper.html" %}{% endfor %}
+{% else %}
+<div class="missing">
+  <h1>No author named “{{ name }}” in the local index</h1>
+  <p>Names are matched exactly (ignoring case and accents). <a href="/?q={{ name | urlencode }}">Search for “{{ name }}” instead</a>.</p>
+</div>
+{% endif %}
+{% endblock %}

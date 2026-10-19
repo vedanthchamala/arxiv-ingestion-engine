@@ -51,6 +51,7 @@ class State:
     pool: ConnectionPool
     inference: InferenceClient
     cache: SearchCache | None = None
+    hybrid: bool = True
 
 
 state = State()
@@ -79,7 +80,7 @@ def run_search(req: SearchRequest) -> SearchResponse:
     t0 = time.monotonic()
     with metrics.API_EMBED_SECONDS.time():
         qvec = state.inference.embed([req.query])[0]
-    scope = scope_key(req.k, req.categories, req.since)
+    scope = scope_key(req.k, req.categories, req.since, req.query)
     if state.cache is not None:
         cached = state.cache.get(qvec, scope)
         metrics.API_CACHE_EVENTS.labels("hit" if cached is not None else "miss").inc()
@@ -90,7 +91,13 @@ def run_search(req: SearchRequest) -> SearchResponse:
             return _finish(resp, t0)
     with state.pool.connection() as conn, metrics.API_DB_SEARCH_SECONDS.time():
         hits = db.search(
-            conn, qvec, k=req.k, categories=req.categories, since=req.since, ef_search=settings.hnsw_ef_search
+            conn,
+            qvec,
+            k=req.k,
+            categories=req.categories,
+            since=req.since,
+            ef_search=settings.hnsw_ef_search,
+            text=req.query if state.hybrid else None,
         )
     resp = SearchResponse(
         query=req.query, took_ms=int((time.monotonic() - t0) * 1000), hits=[to_hit(h) for h in hits]

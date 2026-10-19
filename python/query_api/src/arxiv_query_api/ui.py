@@ -50,12 +50,6 @@ def fmt_date(d: datetime | None) -> str:
     return f"{d.day} {d:%b %Y}" if d else ""
 
 
-def author_list(authors: list[str], limit: int = 6) -> str:
-    if len(authors) <= limit:
-        return ", ".join(authors)
-    return f"{', '.join(authors[:limit])} +{len(authors) - limit} more"
-
-
 def passage(text: str, section: str | None) -> str:
     """Chunk text minus the section title the fetcher prepends to each chunk."""
     first, _, rest = text.partition("\n")
@@ -63,7 +57,6 @@ def passage(text: str, section: str | None) -> str:
 
 
 templates.env.filters["date"] = fmt_date
-templates.env.filters["authors"] = author_list
 templates.env.filters["category_name"] = templates.env.globals["category_name"] = lambda code: (
     CATEGORY_NAMES.get(code, code)
 )
@@ -85,8 +78,8 @@ def corpus() -> dict:
     return _stats[1]
 
 
-def render(request: Request, name: str, status_code: int = 200, **ctx) -> HTMLResponse:
-    return templates.TemplateResponse(request, name, {"corpus": corpus(), **ctx}, status_code=status_code)
+def render(request: Request, template: str, status_code: int = 200, **ctx) -> HTMLResponse:
+    return templates.TemplateResponse(request, template, {"corpus": corpus(), **ctx}, status_code=status_code)
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -125,6 +118,9 @@ def index(
             has_next=len(papers) > PAGE_SIZE,
         )
 
+    arxiv_id = parse_arxiv_id(q)
+    if arxiv_id:
+        return RedirectResponse(f"/paper/{arxiv_id}", status_code=303)
     since = datetime.now(UTC) - WINDOWS[within] if within in WINDOWS else None
     k = 50 if more else SEARCH_K
     try:
@@ -138,7 +134,9 @@ def index(
             error=f"The embedding server at {settings.embedding_url} did not answer ({type(e).__name__}). "
             "Is Ollama (or vLLM) running?",
         )
-    return render(request, "index.html", **ctx, resp=resp, k=k, more=more)
+    with state.pool.connection() as conn:
+        author = db.find_author(conn, q) if len(q.split()) in (2, 3, 4) else None
+    return render(request, "index.html", **ctx, resp=resp, k=k, more=more, author=author)
 
 
 @router.get("/paper/{arxiv_id:path}", response_class=HTMLResponse)
@@ -155,3 +153,13 @@ def paper_page(request: Request, arxiv_id: str):
         )
     related = similar(arxiv_id, 8) or []
     return render(request, "paper.html", paper=paper, sections=sections, related=related)
+
+
+@router.get("/author", response_class=HTMLResponse)
+def author_page(request: Request, name: str = Query(min_length=1, max_length=300)):
+    with state.pool.connection() as conn:
+        author = db.find_author(conn, name)
+        papers = db.author_papers(conn, author["id"]) if author else []
+    return render(
+        request, "author.html", status_code=200 if author else 404, name=name, author=author, papers=papers
+    )

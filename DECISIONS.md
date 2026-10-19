@@ -37,6 +37,7 @@ was made. "Superseded" entries are kept so the reasoning trail stays intact.
 | [30](#30-the-fast-path-never-downgrades-full-text-and-reads-never-open-transactions) | The fast path never downgrades full text; reads never open transactions | accepted (amends 9, 14) |
 | [31](#31-a-failed-page-keeps-the-pages-before-it-and-429-means-back-off) | A failed page keeps the pages before it; 429 means back off, not retry fast | accepted (amends 3, 11) |
 | [32](#32-a-server-rendered-web-ui-in-the-query-api) | Server-rendered web UI inside the query API; no JS build | accepted |
+| [33](#33-hybrid-search-keyword-and-vector-fused-by-rank) | Hybrid search: keyword + vector fused by rank; cache scoped by identifiers | accepted (amends 18, 21) |
 
 ---
 
@@ -341,4 +342,22 @@ only script is an inline `requestSubmit()` on filter chips. Similar papers reuse
 `service.py`, shared by the JSON routes and the pages. **Consequences** No Node toolchain, no
 build step, no second service to deploy; the UI ships in the existing `api` image. Interactivity is
 limited to what forms and links can do, which is enough for search, browse and save.
+
+## 33. Hybrid search: keyword and vector, fused by rank
+**Date** 2026-10-19 · **Context** Readers search for coined names (`CGS-SLAM`, `LoRA`, `pi0.5`) as often
+as for topics, and an embedding blurs them: on 300 "Name: ..." titles, the name alone found its paper at
+rank 1 only 89 % of the time, and `CGS-SLAM` vs `MCGS-SLAM` were near-indistinguishable. **Decision** A
+stored, generated `tsvector` on `papers` (title weight A, abstract weight B, English stemming, GIN
+index; `sql/002_search.sql`). `db.search(text=...)` takes the dense ranking (best chunk per paper, as in
+21) and the top 50 keyword matches (`websearch_to_tsquery`, `ts_rank_cd`) under the same filters, and
+fuses them by reciprocal rank (1/(60 + rank) summed), all in one SQL statement. `score` stays the cosine
+similarity of the paper's best chunk, chunk 0 for keyword-only hits, so it remains comparable. With no
+keyword match the output equals pure dense search. `HYBRID_SEARCH=false` turns it off. Keyword search
+over chunk text was rejected: a passing mention in a body section is weak evidence, and the column
+would rewrite a 4 GB table. Because results now depend on exact tokens, the semantic cache (18) adds
+the query's identifier tokens (a digit or an inner capital) to its scope. **Consequences** Name lookup
+R@10 0.917 → 0.997, rewritten natural-language queries R@1 0.913 → 0.973, category precision@5 0.947 →
+0.973, no per-query regression in either set, SQL latency unchanged (BENCHMARKS.md). Scores in a result
+list are no longer monotonic, since order is fused rank. A query that is an arXiv id or URL now opens
+that paper, and one that is exactly an author's name offers that author's page.
 

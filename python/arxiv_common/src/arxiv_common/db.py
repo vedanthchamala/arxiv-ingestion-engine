@@ -24,6 +24,14 @@ def connect(database_url: str) -> psycopg.Connection:
     return conn
 
 
+def has_keyword_index(conn: psycopg.Connection) -> bool:
+    """True once sql/002_search.sql has added `papers.tsv` (hybrid search needs it)."""
+    row = conn.execute(
+        "SELECT 1 FROM information_schema.columns WHERE table_name = 'papers' AND column_name = 'tsv'"
+    ).fetchone()
+    return row is not None
+
+
 def has_full_text(conn: psycopg.Connection, arxiv_id: str, version: int) -> bool:
     """True when the stored row already carries full text for this version or a newer one."""
     row = conn.execute(
@@ -158,15 +166,23 @@ def search(
     since: datetime | None = None,
     candidate_chunks: int = 200,
     ef_search: int | None = None,
+    text: str | None = None,
 ) -> list[Hit]:
     """Nearest chunks, then best chunk per paper, ordered by cosine similarity.
+
+    With `text`, the dense ranking is fused (reciprocal rank fusion) with a keyword ranking of
+    title + abstract, so exact names and acronyms the embedding blurs still surface; `score` stays
+    the cosine similarity of the paper's best chunk (chunk 0 for keyword-only hits).
 
     `ef_search` widens pgvector's HNSW candidate list for this query only (default 40 misses ~6 %
     of exact nearest neighbours at 230K chunks; see BENCHMARKS.md)."""
     with conn.transaction():
         if ef_search:
             conn.execute(sql.SQL("SET LOCAL hnsw.ef_search = {}").format(sql.Literal(int(ef_search))))
-        rows = _search_rows(conn, query_vec, k, categories, since, candidate_chunks)
+        if text:
+            rows = _hybrid_rows(conn, query_vec, text, k, categories, since, candidate_chunks)
+        else:
+            rows = _search_rows(conn, query_vec, k, categories, since, candidate_chunks)
     return [
         Hit(
             arxiv_id=r["arxiv_id"],
@@ -217,6 +233,69 @@ def _search_rows(conn, query_vec, k, categories, since, candidate_chunks):
             "cats": list(categories) if categories else None,
             "since": since,
             "cand": candidate_chunks,
+            "k": k,
+        },
+    ).fetchall()
+
+
+RRF_K = 60
+KEYWORD_CANDIDATES = 50
+
+
+def _hybrid_rows(conn, query_vec, text, k, categories, since, candidate_chunks):
+    return conn.execute(
+        f"""
+        WITH nearest AS (
+            SELECT c.arxiv_id, c.idx, c.section, c.text,
+                   1 - (c.embedding <=> %(q)s::vector) AS score
+            FROM chunks c
+            JOIN papers p ON p.arxiv_id = c.arxiv_id
+            WHERE (%(cats)s::text[] IS NULL OR p.categories && %(cats)s::text[])
+              AND (%(since)s::timestamptz IS NULL OR p.published_at >= %(since)s::timestamptz)
+            ORDER BY c.embedding <=> %(q)s::vector
+            LIMIT %(cand)s
+        ),
+        best AS (
+            SELECT DISTINCT ON (arxiv_id) * FROM nearest ORDER BY arxiv_id, score DESC
+        ),
+        dense AS (
+            SELECT *, row_number() OVER (ORDER BY score DESC) AS r FROM best
+        ),
+        keyword AS (
+            SELECT p.arxiv_id,
+                   row_number() OVER (ORDER BY ts_rank_cd(p.tsv, tq, 1) DESC, p.published_at DESC) AS r
+            FROM papers p, websearch_to_tsquery('english', %(text)s) tq
+            WHERE p.tsv @@ tq
+              AND (%(cats)s::text[] IS NULL OR p.categories && %(cats)s::text[])
+              AND (%(since)s::timestamptz IS NULL OR p.published_at >= %(since)s::timestamptz)
+            ORDER BY r
+            LIMIT %(kw)s
+        ),
+        fused AS (
+            SELECT arxiv_id, d.idx, d.section, d.text, d.score,
+                   COALESCE(1.0 / (%(rrf)s + d.r), 0) + COALESCE(1.0 / (%(rrf)s + w.r), 0) AS rrf
+            FROM dense d FULL JOIN keyword w USING (arxiv_id)
+            ORDER BY rrf DESC, arxiv_id
+            LIMIT %(k)s
+        )
+        SELECT f.arxiv_id, COALESCE(f.idx, c0.idx) AS idx, COALESCE(f.section, c0.section) AS section,
+               COALESCE(f.text, c0.text) AS chunk_text,
+               COALESCE(f.score, 1 - (c0.embedding <=> %(q)s::vector)) AS score,
+               p.version, p.title, p.abstract, p.summary, p.primary_category, p.categories, p.published_at,
+               {_AUTHORS}
+        FROM fused f
+        JOIN papers p ON p.arxiv_id = f.arxiv_id
+        LEFT JOIN chunks c0 ON f.idx IS NULL AND c0.arxiv_id = f.arxiv_id AND c0.idx = 0
+        ORDER BY f.rrf DESC, f.arxiv_id
+        """,
+        {
+            "q": list(query_vec),
+            "text": text,
+            "cats": list(categories) if categories else None,
+            "since": since,
+            "cand": candidate_chunks,
+            "kw": KEYWORD_CANDIDATES,
+            "rrf": RRF_K,
             "k": k,
         },
     ).fetchall()
@@ -277,3 +356,26 @@ def corpus_stats(conn: psycopg.Connection) -> dict:
         "(SELECT max(published_at) FROM papers) AS newest, "
         "(SELECT max(processed_at) FROM papers) AS last_processed"
     ).fetchone()
+
+
+def find_author(conn: psycopg.Connection, name: str) -> dict | None:
+    """The author whose normalized name equals `name`'s, with their paper count."""
+    return conn.execute(
+        "SELECT a.id, a.name, count(pa.arxiv_id) AS papers FROM authors a "
+        "JOIN paper_authors pa ON pa.author_id = a.id WHERE a.name_norm = %s GROUP BY a.id",
+        (author_norm(name),),
+    ).fetchone()
+
+
+def author_papers(conn: psycopg.Connection, author_id: int, limit: int = 100) -> list[dict]:
+    return conn.execute(
+        f"""
+        SELECT p.arxiv_id, p.version, p.title, p.abstract, p.summary, p.primary_category, p.categories,
+               p.published_at, p.source, {_AUTHORS}
+        FROM paper_authors x JOIN papers p ON p.arxiv_id = x.arxiv_id
+        WHERE x.author_id = %s
+        ORDER BY p.published_at DESC
+        LIMIT %s
+        """,
+        (author_id, limit),
+    ).fetchall()
