@@ -28,3 +28,8 @@ class Settings:
     cache_distance: float = field(default_factory=lambda: float(_env("CACHE_DISTANCE", "0.12")))
     hnsw_ef_search: int = field(default_factory=lambda: int(_env("HNSW_EF_SEARCH", "200")))
     metrics_port: int = field(default_factory=lambda: int(_env("METRICS_PORT", "9103")))
+    categories: tuple[str, ...] = field(
+        default_factory=lambda: tuple(
+            c.strip() for c in _env("ARXIV_CATEGORIES", "cs.LG,cs.CV,cs.RO").split(",") if c.strip()
+        )
+    )

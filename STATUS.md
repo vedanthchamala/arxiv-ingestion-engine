@@ -1,6 +1,6 @@
 # Status
 
-Plan approved 2026-09-07. Last update: 2026-09-10.
+Plan approved 2026-09-07. Last update: 2026-10-19.
 
 | Phase | State | Evidence |
 |---|---|---|
@@ -19,6 +19,7 @@ Plan approved 2026-09-07. Last update: 2026-09-10.
 | 13. Continuous operation | **running** since 2026-09-10 16:59 UTC | poller: 211 cycles in 95 h without a crash before a deploy restart on 2026-09-14; picked up both announcement days in its window (2026-09-10: 437 papers; 2026-09-13: 347 papers, ingested 01:49–10:31 UTC); fetcher drained the backlog in 10.4 h (7,881 papers, 235,503 chunks); full-text worker drained its 10k queue in 12.6 h on one instance; every lag 0; DB 2026-09-14: 8,054 papers = every id in the seen-set, 239,912 chunks, 7,957 full-text, 8,019 summaries, 0 gappy chunk sets, 0 orphans. **Caveat:** since 2026-09-11 17:20 UTC arXiv's API answers 429 Too Many Requests on ~68 % of the poller's requests (893 of 1,321) even at the documented 3 s spacing, so cycles spend 3–7 min in retries; the announcements got through because retries eventually succeed |
 | 14. Crash test | **done** 2026-09-11 | SIGKILL of the full-text worker mid-message, restart: the in-flight paper (2604.14501v2) was redelivered and stored again; 0 gappy chunk sets, 0 orphans, counts consistent. Found and fixed on the way: replay of `papers.new` could downgrade full-text rows, and a pre-check `SELECT` on a non-autocommit connection stopped every later transaction from committing (decision 30) |
 | 15. Full-corpus tuning | **done** 2026-09-12 | at 229k chunks the planner uses HNSW and `ef_search` 40 lost 6 points of title recall@1; swept 40/100/200/400, default now 200 (`HNSW_EF_SEARCH`, `SET LOCAL` per query): recall@1 0.986, SQL p50 20 ms; API cold p50 58 ms, hit 36 ms, ~86 req/s, 0 errors (BENCHMARKS.md) |
+| 16. Web UI | **done** 2026-10-19 | server-rendered pages in the query API (decision 32): latest feed with category filter and paging, search with category/time filters and the matched passage, paper page with indexed sections and similar papers (chunk-0 vector, no inference call); `GET /papers/{id}/similar`. Against the live 10,394-paper DB with the cache off, warm medians: home 5 ms, search 34–44 ms, paper page 11 ms; checked in light, dark and at 375 px. 16 UI tests + 14 id-parser cases (65 Python tests) |
 
 ## Live run log
 | When | What |

@@ -220,3 +220,60 @@ def _search_rows(conn, query_vec, k, categories, since, candidate_chunks):
             "k": k,
         },
     ).fetchall()
+
+
+_AUTHORS = """COALESCE((SELECT array_agg(a.name ORDER BY pa.position)
+                  FROM paper_authors pa JOIN authors a ON a.id = pa.author_id
+                  WHERE pa.arxiv_id = p.arxiv_id), '{}') AS authors"""
+
+
+def get_paper(conn: psycopg.Connection, arxiv_id: str) -> dict | None:
+    return conn.execute(
+        f"""
+        SELECT p.*, (SELECT count(*) FROM chunks c WHERE c.arxiv_id = p.arxiv_id) AS chunk_count, {_AUTHORS}
+        FROM papers p WHERE p.arxiv_id = %s
+        """,
+        (arxiv_id,),
+    ).fetchone()
+
+
+def latest(
+    conn: psycopg.Connection, limit: int = 30, offset: int = 0, categories: Sequence[str] | None = None
+) -> list[dict]:
+    """Newest papers first (by first-version date), optionally limited to categories."""
+    return conn.execute(
+        f"""
+        SELECT p.arxiv_id, p.version, p.title, p.abstract, p.summary, p.primary_category, p.categories,
+               p.published_at, p.source, {_AUTHORS}
+        FROM papers p
+        WHERE (%(cats)s::text[] IS NULL OR p.categories && %(cats)s::text[])
+        ORDER BY p.published_at DESC, p.arxiv_id DESC
+        LIMIT %(limit)s OFFSET %(offset)s
+        """,
+        {"cats": list(categories) if categories else None, "limit": limit, "offset": offset},
+    ).fetchall()
+
+
+def sections(conn: psycopg.Connection, arxiv_id: str) -> list[str]:
+    """Section titles of the stored full text, in document order (chunk 0, the abstract, excluded)."""
+    rows = conn.execute(
+        "SELECT section FROM chunks WHERE arxiv_id = %s AND idx > 0 AND section IS NOT NULL "
+        "GROUP BY section ORDER BY min(idx)",
+        (arxiv_id,),
+    ).fetchall()
+    return [r["section"] for r in rows]
+
+
+def paper_vector(conn: psycopg.Connection, arxiv_id: str) -> list[float] | None:
+    """Embedding of the paper's title + abstract (chunk 0 for every source)."""
+    row = conn.execute("SELECT embedding FROM chunks WHERE arxiv_id = %s AND idx = 0", (arxiv_id,)).fetchone()
+    return None if row is None else row["embedding"].to_list()
+
+
+def corpus_stats(conn: psycopg.Connection) -> dict:
+    return conn.execute(
+        "SELECT (SELECT count(*) FROM papers) AS papers, "
+        "(SELECT count(*) FROM papers WHERE source IN ('html', 'pdf')) AS full_text, "
+        "(SELECT max(published_at) FROM papers) AS newest, "
+        "(SELECT max(processed_at) FROM papers) AS last_processed"
+    ).fetchone()

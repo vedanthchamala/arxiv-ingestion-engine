@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}{{ paper.title }} · arXiv search{% endblock %}
+{% block content %}
+<article class="full">
+  <div class="meta">
+    {% for c in paper.categories %}<span class="cat{% if c == paper.primary_category %} primary{% endif %}" title="{{ category_name(c) }}">{{ c }}</span>{% endfor %}
+  </div>
+  <h1>{{ paper.title }}</h1>
+  <p class="authors">{{ paper.authors | join(", ") }}</p>
+  <p class="dates">
+    {{ paper.arxiv_id }}v{{ paper.version }} · published {{ paper.published_at | date }}
+    {% if paper.updated_at and paper.updated_at.date() != paper.published_at.date() %}· updated {{ paper.updated_at | date }}{% endif %}
+  </p>
+  <div class="actions">
+    <a class="btn" href="https://arxiv.org/abs/{{ paper.arxiv_id }}v{{ paper.version }}">arXiv page</a>
+    <a class="btn" href="https://arxiv.org/pdf/{{ paper.arxiv_id }}v{{ paper.version }}">PDF</a>
+    {% if paper.html_url %}<a class="btn" href="{{ paper.html_url }}">HTML</a>{% endif %}
+    {% if paper.doi %}<a class="btn" href="https://doi.org/{{ paper.doi }}">DOI</a>{% endif %}
+  </div>
+
+  {% if paper.summary %}
+  <section>
+    <h2>Summary</h2>
+    <p class="summary">{{ paper.summary }}</p>
+    {% if paper.summary_model %}<p class="fine">Written by {{ paper.summary_model }} from the abstract and introduction.</p>{% endif %}
+  </section>
+  {% endif %}
+
+  <section>
+    <h2>Abstract</h2>
+    <p>{{ paper.abstract }}</p>
+    {% if paper.comment %}<p class="fine">Comment: {{ paper.comment }}</p>{% endif %}
+    {% if paper.journal_ref %}<p class="fine">Journal: {{ paper.journal_ref }}</p>{% endif %}
+  </section>
+
+  <section>
+    <h2>Indexed text</h2>
+    {% if paper.source in ("html", "pdf") %}
+    <p class="fine">Full text from the arXiv {{ paper.source | upper }}, {{ paper.chunk_count }} passages{% if sections %} across these sections:{% else %}.{% endif %}</p>
+    {% if sections %}<ol class="toc">{% for s in sections %}<li>{{ s }}</li>{% endfor %}</ol>{% endif %}
+    {% else %}
+    <p class="fine">Only the title and abstract so far; the full text is fetched in the background.</p>
+    {% endif %}
+  </section>
+
+  <section id="similar">
+    <h2>Similar papers</h2>
+    {% for r in related %}
+    <a class="related" href="/paper/{{ r.arxiv_id }}">
+      <span class="r-title">{{ r.title }}</span>
+      <span class="r-meta">{{ r.primary_category }} · {{ r.published_at | date }} · {{ "%.2f" | format(r.score) }}</span>
+    </a>
+    {% else %}
+    <p class="fine">No similar papers found.</p>
+    {% endfor %}
+  </section>
+</article>
+{% endblock %}

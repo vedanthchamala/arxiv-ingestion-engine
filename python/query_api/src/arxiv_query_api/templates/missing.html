@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Not found · arXiv search{% endblock %}
+{% block content %}
+<div class="missing">
+  <h1>{{ arxiv_id }} is not in the local index</h1>
+  {% if valid %}
+  <p>It may be outside the categories this pipeline watches, or older than its first poll.</p>
+  <p><a class="btn" href="https://arxiv.org/abs/{{ arxiv_id }}">Open it on arXiv</a></p>
+  {% else %}
+  <p>That does not look like an arXiv id.</p>
+  {% endif %}
+  <p><a href="/">← Back to search</a></p>
+</div>
+{% endblock %}

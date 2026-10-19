@@ -36,6 +36,7 @@ was made. "Superseded" entries are kept so the reasoning trail stays intact.
 | [29](#29-containerized-pipeline-services) | Containerized pipeline services behind a compose profile | accepted (amends 24) |
 | [30](#30-the-fast-path-never-downgrades-full-text-and-reads-never-open-transactions) | The fast path never downgrades full text; reads never open transactions | accepted (amends 9, 14) |
 | [31](#31-a-failed-page-keeps-the-pages-before-it-and-429-means-back-off) | A failed page keeps the pages before it; 429 means back off, not retry fast | accepted (amends 3, 11) |
+| [32](#32-a-server-rendered-web-ui-in-the-query-api) | Server-rendered web UI inside the query API; no JS build | accepted |
 
 ---
 
@@ -328,3 +329,16 @@ from the top. Errors are logged with `{:#}`. A 429 backs off 30/60/120/240 s and
 `arxiv_requests_total{outcome="throttled"}`. **Consequences** Metrics and logs match the database
 again; throttling is visible on the dashboard instead of disguised as generic errors; a throttled
 cycle takes longer but the 15-minute schedule absorbs it. The cause of the 429s is still open.
+
+## 32. A server-rendered web UI in the query API
+**Date** 2026-10-19 · **Context** The pipeline had only a JSON API, so using it meant `curl`; the
+goal is a tool someone opens in a browser every morning. **Decision** Jinja2 templates and one
+stylesheet served by the existing FastAPI process (`ui.py`), not a separate frontend: `/` is the
+latest-papers feed or, with `q`, the search results; `/paper/{id}` shows summary, abstract, indexed
+sections and similar papers. Filters are plain GET forms, so every view is a bookmarkable URL; the
+only script is an inline `requestSubmit()` on filter chips. Similar papers reuse the stored chunk-0
+(title + abstract) embedding, so they cost no inference call. The search core moved to
+`service.py`, shared by the JSON routes and the pages. **Consequences** No Node toolchain, no
+build step, no second service to deploy; the UI ships in the existing `api` image. Interactivity is
+limited to what forms and links can do, which is enough for search, browse and save.
+

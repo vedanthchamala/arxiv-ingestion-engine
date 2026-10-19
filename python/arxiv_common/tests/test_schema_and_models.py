@@ -4,7 +4,7 @@ import pytest
 
 from arxiv_common import schema
 from arxiv_common.models import ChunkedPaper, Paper
-from arxiv_common.text import author_norm, l2_normalize, strip_nul
+from arxiv_common.text import author_norm, l2_normalize, parse_arxiv_id, strip_nul
 
 
 def sample_paper() -> Paper:
@@ -78,3 +78,26 @@ def test_author_norm_and_l2():
 
 def test_strip_nul_removes_only_nul_bytes():
     assert strip_nul("a\x00b\tc") == "ab\tc"
+
+
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [
+        ("2609.01234", "2609.01234"),
+        ("2609.01234v3", "2609.01234"),
+        ("  arXiv:2609.01234 ", "2609.01234"),
+        ("https://arxiv.org/abs/2609.01234v2", "2609.01234"),
+        ("http://export.arxiv.org/abs/2609.01234", "2609.01234"),
+        ("https://arxiv.org/pdf/2609.01234v1.pdf", "2609.01234"),
+        ("https://arxiv.org/html/2609.01234v1/", "2609.01234"),
+        ("1501.0001", "1501.0001"),
+        ("cs/0601001v1", "cs/0601001"),
+        ("math.GT/0309136", "math.GT/0309136"),
+        ("diffusion policy", None),
+        ("2609.01234 diffusion", None),
+        ("https://example.com/abs/2609.01234", None),
+        ("", None),
+    ],
+)
+def test_parse_arxiv_id(given, expected):
+    assert parse_arxiv_id(given) == expected

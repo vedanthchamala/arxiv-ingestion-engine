@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}{% if q %}{{ q }} · {% endif %}arXiv search{% endblock %}
+{% block content %}
+<form class="search" action="/" method="get" role="search">
+  <div class="bar">
+    <input type="search" name="q" value="{{ q }}" aria-label="Search papers"
+           placeholder="Search by meaning, e.g. diffusion policy for robot manipulation" {% if not q %}autofocus{% endif %}>
+    <button type="submit">Search</button>
+  </div>
+  <div class="filters">
+    <fieldset class="chips">
+      <legend class="sr">Categories</legend>
+      {% for code in categories %}
+      <label class="chip">
+        <input type="checkbox" name="cat" value="{{ code }}" {% if code in selected %}checked{% endif %}
+               onchange="this.form.requestSubmit()">
+        <span>{{ category_name(code) }}</span>
+      </label>
+      {% endfor %}
+    </fieldset>
+    {% if q %}
+    <fieldset class="seg">
+      <legend class="sr">Published</legend>
+      {% for value, label in windows %}
+      <label>
+        <input type="radio" name="within" value="{{ value }}" {% if value == within %}checked{% endif %}
+               onchange="this.form.requestSubmit()">
+        <span>{{ label }}</span>
+      </label>
+      {% endfor %}
+    </fieldset>
+    {% endif %}
+  </div>
+</form>
+
+{% if error %}
+<div class="error" role="alert">{{ error }}</div>
+{% elif q %}
+<p class="count">
+  {{ resp.hits | length }} result{{ "" if resp.hits | length == 1 else "s" }} · {{ resp.took_ms }} ms{% if resp.cached %} · from cache{% endif %}
+</p>
+{% for p in resp.hits %}{% include "_paper.html" %}{% endfor %}
+{% if not resp.hits %}<p class="empty">Nothing matched. Try fewer filters or other words.</p>{% endif %}
+{% if not more and resp.hits | length == k %}
+<a class="more" href="/?{{ request.query_params }}&more=1">Show more results</a>
+{% endif %}
+{% else %}
+<h2 class="section-title">Latest papers{% if selected %} in {{ selected | map("category_name") | join(", ") }}{% endif %}</h2>
+{% for p in papers %}{% include "_paper.html" %}{% endfor %}
+{% if not papers %}<p class="empty">No papers yet. Start the pipeline (see the README) and they will appear here.</p>{% endif %}
+<nav class="pager">
+  {% if page > 0 %}<a href="/?{% for c in selected %}cat={{ c }}&{% endfor %}page={{ page - 1 }}">← Newer</a>{% endif %}
+  {% if has_next %}<a href="/?{% for c in selected %}cat={{ c }}&{% endfor %}page={{ page + 1 }}">Older →</a>{% endif %}
+</nav>
+{% endif %}
+{% endblock %}

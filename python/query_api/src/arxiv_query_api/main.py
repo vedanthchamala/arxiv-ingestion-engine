@@ -1,63 +1,24 @@
 import os
-import time
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi.staticfiles import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
-from pydantic import BaseModel, Field
 
 from arxiv_common import db, metrics
-from arxiv_common.config import Settings
 from arxiv_common.inference import InferenceClient
 from arxiv_common.logging import configure
 
-from .cache import SearchCache, scope_key
+from . import ui
+from .cache import SearchCache
+from .service import SearchHit, SearchRequest, SearchResponse, run_search, settings, similar, state
 
-settings = Settings()
-
-
-class SearchRequest(BaseModel):
-    query: str = Field(min_length=1, max_length=2000)
-    k: int = Field(default=10, ge=1, le=50)
-    categories: list[str] | None = None
-    since: datetime | None = None
-
-
-class SearchHit(BaseModel):
-    arxiv_id: str
-    version: int
-    title: str
-    authors: list[str]
-    primary_category: str
-    categories: list[str]
-    published_at: datetime
-    score: float
-    summary: str | None
-    abstract: str
-    chunk_idx: int
-    chunk_section: str | None
-    chunk_text: str
-    url: str
-
-
-class SearchResponse(BaseModel):
-    query: str
-    hits: list[SearchHit]
-    took_ms: int
-    cached: bool = False
-
-
-class State:
-    pool: ConnectionPool
-    inference: InferenceClient
-    cache: SearchCache | None = None
-
-
-state = State()
+__all__ = ["SearchHit", "SearchRequest", "SearchResponse", "app", "run_search", "state"]
 
 
 @asynccontextmanager
@@ -93,61 +54,9 @@ def _register_vector(conn):
     register_vector(conn)
 
 
-app = FastAPI(title="arXiv semantic search", version="0.1.0", lifespan=lifespan)
-
-
-def run_search(req: SearchRequest) -> SearchResponse:
-    t0 = time.monotonic()
-    with metrics.API_EMBED_SECONDS.time():
-        qvec = state.inference.embed([req.query])[0]
-    scope = scope_key(req.k, req.categories, req.since)
-    if state.cache is not None:
-        cached = state.cache.get(qvec, scope)
-        metrics.API_CACHE_EVENTS.labels("hit" if cached is not None else "miss").inc()
-        if cached is not None:
-            resp = SearchResponse.model_validate(cached)
-            resp.query = req.query
-            resp.cached = True
-            return _finish(resp, t0)
-    with state.pool.connection() as conn, metrics.API_DB_SEARCH_SECONDS.time():
-        hits = db.search(
-            conn, qvec, k=req.k, categories=req.categories, since=req.since, ef_search=settings.hnsw_ef_search
-        )
-    resp = SearchResponse(
-        query=req.query,
-        took_ms=int((time.monotonic() - t0) * 1000),
-        hits=[
-            SearchHit(
-                arxiv_id=h.arxiv_id,
-                version=h.version,
-                title=h.title,
-                authors=h.authors,
-                primary_category=h.primary_category,
-                categories=h.categories,
-                published_at=h.published_at,
-                score=round(h.score, 4),
-                summary=h.summary,
-                abstract=h.abstract,
-                chunk_idx=h.chunk_idx,
-                chunk_section=h.chunk_section,
-                chunk_text=h.chunk_text,
-                url=f"https://arxiv.org/abs/{h.arxiv_id}v{h.version}",
-            )
-            for h in hits
-        ],
-    )
-    if state.cache is not None:
-        state.cache.put(req.query, qvec, scope, resp.model_dump(mode="json"))
-    return _finish(resp, t0)
-
-
-def _finish(resp: SearchResponse, t0: float) -> SearchResponse:
-    took = time.monotonic() - t0
-    resp.took_ms = int(took * 1000)
-    cached = "true" if resp.cached else "false"
-    metrics.API_SEARCH_SECONDS.labels(cached).observe(took)
-    metrics.API_SEARCH.labels(cached).inc()
-    return resp
+app = FastAPI(title="arXiv semantic search", version="0.2.0", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+app.include_router(ui.router)
 
 
 @app.post("/search", response_model=SearchResponse)
@@ -165,22 +74,21 @@ def search_get(
     return run_search(SearchRequest(query=q, k=k, categories=category, since=since))
 
 
+@app.get("/papers/{arxiv_id:path}/similar", response_model=list[SearchHit])
+def paper_similar(arxiv_id: str, k: int = Query(default=10, ge=1, le=50)) -> list[SearchHit]:
+    hits = similar(arxiv_id, k)
+    if hits is None:
+        raise HTTPException(404, f"{arxiv_id} not ingested")
+    return hits
+
+
 @app.get("/papers/{arxiv_id:path}")
 def paper(arxiv_id: str) -> dict:
     with state.pool.connection() as conn:
-        row = conn.execute(
-            """
-            SELECT p.*, (SELECT count(*) FROM chunks c WHERE c.arxiv_id = p.arxiv_id) AS chunk_count,
-                   COALESCE((SELECT array_agg(a.name ORDER BY pa.position)
-                             FROM paper_authors pa JOIN authors a ON a.id = pa.author_id
-                             WHERE pa.arxiv_id = p.arxiv_id), '{}') AS authors
-            FROM papers p WHERE p.arxiv_id = %s
-            """,
-            (arxiv_id,),
-        ).fetchone()
+        row = db.get_paper(conn, arxiv_id)
     if row is None:
         raise HTTPException(404, f"{arxiv_id} not ingested")
-    return dict(row)
+    return row
 
 
 @app.get("/stats")

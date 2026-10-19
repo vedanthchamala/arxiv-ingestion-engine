@@ -1,0 +1,26 @@
+{# One paper card. `p` is a search hit or a row from the latest feed; `score` only on hits. #}
+<article class="card">
+  <div class="meta">
+    <span class="cat" title="{{ category_name(p.primary_category) }}">{{ p.primary_category }}</span>
+    <time datetime="{{ p.published_at.isoformat() }}">{{ p.published_at | date }}</time>
+    {% if p.score is defined %}<span class="score" title="cosine similarity of the best-matching passage">{{ "%.2f" | format(p.score) }}</span>{% endif %}
+  </div>
+  <h3><a href="/paper/{{ p.arxiv_id }}">{{ p.title }}</a></h3>
+  <p class="authors">{{ p.authors | authors }}</p>
+  {% if p.summary %}
+  <p class="summary">{{ p.summary }}</p>
+  {% else %}
+  <p class="abstract">{{ p.abstract }}</p>
+  {% endif %}
+  {% if p.chunk_text is defined and p.chunk_idx > 0 %}
+  <blockquote class="passage">
+    <span class="where">Matched in § {{ p.chunk_section or "full text" }}</span>
+    {{ passage(p.chunk_text, p.chunk_section) | truncate(360) }}
+  </blockquote>
+  {% endif %}
+  <div class="links">
+    <a href="https://arxiv.org/abs/{{ p.arxiv_id }}v{{ p.version }}">arXiv</a>
+    <a href="https://arxiv.org/pdf/{{ p.arxiv_id }}v{{ p.version }}">PDF</a>
+    <a href="/paper/{{ p.arxiv_id }}#similar">Similar</a>
+  </div>
+</article>

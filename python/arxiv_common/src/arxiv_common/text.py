@@ -26,3 +26,16 @@ def l2_normalize(vec: list[float]) -> list[float]:
 def strip_nul(s: str) -> str:
     """Postgres text columns reject NUL bytes; extracted PDF/HTML text occasionally carries them."""
     return s.replace("\x00", "")
+
+
+_ARXIV_ID = re.compile(
+    r"^(?:https?://(?:www\.|export\.)?arxiv\.org/(?:abs|pdf|html)/|arxiv:)?"
+    r"(\d{4}\.\d{4,5}|[a-z][a-z.-]*/\d{7})(?:v\d+)?(?:\.pdf)?/?$",
+    re.IGNORECASE,
+)
+
+
+def parse_arxiv_id(s: str) -> str | None:
+    """Unversioned arXiv id from a bare id, `arXiv:` id or arxiv.org abs/pdf/html URL; else None."""
+    m = _ARXIV_ID.match(s.strip())
+    return m.group(1) if m else None
