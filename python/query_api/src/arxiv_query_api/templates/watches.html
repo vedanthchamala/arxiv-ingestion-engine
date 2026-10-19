@@ -27,7 +27,7 @@
   {% else %}
   <p class="fine">Nothing in this window.</p>
   {% endfor %}
-  {% if r.matches | length > 3 %}<a class="all" href="/watches/{{ r.watch.id }}?within={{ within }}">All {{ r.matches | length }} →</a>{% endif %}
+  {% if r.matches | length > 3 %}<a class="all" href="/watches/{{ r.watch.id }}?within={{ within }}">All {{ r.matches | length }}{% if r.matches | length >= limit %}+{% endif %} →</a>{% endif %}
 </section>
 {% else %}
 <p class="empty">No watches yet. Search for something and choose “Watch this search”, or add one below.</p>

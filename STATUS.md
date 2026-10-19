@@ -23,6 +23,7 @@ Plan approved 2026-09-07. Last update: 2026-10-19.
 | 17. Hybrid search, authors, id lookup | **done** 2026-10-19 | `sql/002_search.sql` (title+abstract `tsvector`, applied to the live DB in 1.8 s) and rank fusion in `db.search` (decision 33). `eval_search.py --mode` + two new query sets: name lookup R@10 0.917 → 0.997, LLM-rewritten queries R@1 0.913 → 0.973, precision@5 0.947 → 0.973, 0 per-query regressions, SQL p50 15 ms either way (BENCHMARKS.md). Cache scope keyed by identifier tokens. Pasting an arXiv id/URL opens the paper; author names link to `/author`; an exact author-name query offers the author page. 76 Python tests incl. a live hybrid check |
 | 18. Watches | **done** 2026-10-19 | `sql/003_watches.sql` and `/watches` (decision 34): save any search, per-watch matches in a week/month/year window with a keyword-or-cosine≥0.55 floor (measured on LoRA / topical / unrelated queries), new-since-last-visit marking, Atom feed per watch, `Origin` check on posts. Live: 3 watches on the 10k-paper DB render in 10-50 ms; back-dating one watch's `seen_at` showed 13 new, cleared after opening it; a cross-origin post got 403. 15 watch tests (91 Python tests) |
 | 19. One-command setup and operability | **done** 2026-10-19 | `scripts/quickstart.sh` (decision 35): `--no-ingest` run on the live stack took 58 s to a searchable UI in containers reaching host Ollama, 0 restarts; refuses while host-side processes run. Poller warns and counts `poller_capped_total` when it hits the page cap with unseen papers left (decision 36). DLQ found empty: Redpanda's default 7-day retention had deleted all 42 records, including the five NUL papers; `dev.sh` now keeps `papers.failed` forever (applied to the live topic). `scripts/replay_dlq.py` verified on throwaway topics: latest failure per paper, resolved papers skipped, raw/invalid payloads listed only, `chunked` → `papers.chunked`, `paper` → `papers.new`. Summary prompt with a worked example: "The paper …" openers 8/8 → 0/24, 65 → 41 words, 0 leaked example details (new summaries only) |
+| 20. README | **done** 2026-10-19 | rewritten short: what you get, quickstart, a mermaid architecture diagram (rendered with Mermaid 11 at README width before committing; the first, subgraph-based draft was a tangle of crossing edges and was redrawn top-down), pages, config, operations, results. Screenshots in `docs/`. `scripts/run.sh start` now refuses while the containerized pipeline runs (two full-text workers on one Ollama stalled it on 2026-09-11) |
 
 ## Live run log
 | When | What |
@@ -54,7 +55,7 @@ Append a row with `scripts/snapshot.sh`.
 
 ## Tests
 ```
-cd rust   && cargo test && cargo clippy --all-targets -- -D warnings   # 17 tests (+1 Redis integration test: REDIS_URL=... cargo test -- --ignored)
-cd python && uv run pytest && uv run ruff check .                        # 33 tests (2 skip without the live stack)
+cd rust   && cargo test && cargo clippy --all-targets -- -D warnings   # 18 tests (+1 Redis integration test: REDIS_URL=... cargo test -- --ignored)
+cd python && uv run pytest && uv run ruff check .                        # 91 tests (live-DB checks skip without Postgres)
 ./scripts/smoke.sh                                                       # live stack consistency
 ```

@@ -2,167 +2,146 @@
 
 [![ci](https://github.com/vedanthchamala/arxiv-ingestion-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/vedanthchamala/arxiv-ingestion-engine/actions/workflows/ci.yml)
 
-A pipeline that watches arXiv for new machine learning, computer vision and robotics papers,
-pulls their full text, embeds and summarizes them, and lets you search them by meaning.
+A self-hosted search engine for new arXiv papers. It watches the machine learning, computer vision and
+robotics categories, pulls each paper's full text, summarizes it with a local model, and gives you a web
+page to search everything by meaning, by name or by author. Saved searches tell you what's new each
+morning.
 
-arXiv publishes a few hundred papers a night in these three categories. A few minutes after the
-announcement you can already search that night's batch by abstract; over the following hours the
-full text and a short summary arrive for each one. Everything runs on one laptop plus, optionally,
-a GPU box for inference.
+![Search results](docs/search.png)
 
-## How it works
+## What you get
 
+- **Search that understands topics and names.** "diffusion policy for robot manipulation" finds papers
+  that never use those exact words, and `CGS-SLAM` finds the CGS-SLAM paper rather than its lookalikes.
+  Each result shows the passage that matched and a short summary.
+- **A latest-papers feed** filtered by category, with a page per paper: summary, abstract, indexed
+  sections and similar papers.
+- **Watches.** Save any search and see the papers that arrived since your last visit, or subscribe to
+  its Atom feed in any feed reader.
+- **Everything local.** Embeddings and summaries come from Ollama on your machine (or vLLM on a GPU
+  box), and no paper text leaves it.
+
+## Quickstart
+
+You need [Docker](https://docs.docker.com/get-docker/) and [Ollama](https://ollama.com/download), both
+running.
+
+```bash
+git clone https://github.com/vedanthchamala/arxiv-ingestion-engine.git
+cd arxiv-ingestion-engine
+scripts/quickstart.sh            # add --no-summaries to skip the 4.7 GB summary model
 ```
-                 every 15 min                     one instance, all arxiv.org traffic
-  arXiv API ──▶  poller (Rust)  ──▶ papers.new ──▶  fetcher (Rust)  ──▶ papers.chunked ──▶ worker (Python) ──▶ Postgres + pgvector
-                                        │                                                                            ▲
-                                        └──▶ worker-abstract (Python): title + abstract, searchable in seconds ──────┘
-                                                                                                                     │
-                                                                                     query API (FastAPI) + Redis semantic cache
+
+Then open **http://localhost:8000**. The first poll collects the ~2,000 newest papers in each category.
+They're searchable by title and abstract within about ten minutes. Full text and summaries follow over
+the next few hours, because arXiv allows one request every three seconds.
+
+```bash
+docker compose --profile pipeline logs -f poller worker   # follow progress
+docker compose --profile pipeline stop                    # stop; your data stays in Docker volumes
+scripts/quickstart.sh                                     # start again (also rebuilds after a git pull)
 ```
-
-1. **Poller.** Every 15 minutes it asks the arXiv API for the newest papers in each category and
-   walks the results newest-first until it reaches papers it has already seen (a Redis set keyed
-   by paper id and version). Each new paper becomes one JSON message on the `papers.new` topic.
-   Papers cross-listed in several categories are seen once.
-2. **Fast path.** `worker-abstract` reads `papers.new`, embeds the title and abstract, and writes
-   the paper to Postgres. From this point the paper shows up in search.
-3. **Fetcher.** Also reads `papers.new`. For each paper it tries the HTML rendering first
-   (`arxiv.org/html/…`, which has real section headings), falls back to the PDF via `pdftotext`,
-   and if neither exists keeps just the abstract. The text is split into 512-token chunks with the
-   embedding model's own tokenizer and sent on as one `papers.chunked` message per paper.
-4. **Worker.** Reads `papers.chunked`, embeds every chunk, asks a 7B instruct model for a
-   three-sentence summary, and replaces the abstract-only row with the full set of chunks in one
-   transaction.
-5. **Search.** `POST /search` embeds the query, finds the nearest chunks in pgvector (category and
-   date filters run in the same SQL), keeps the best chunk per paper, and returns the papers with
-   the passage that matched. A Redis semantic cache answers paraphrases of recent queries without
-   touching the database.
-
-The topics live in Redpanda (Kafka API), six partitions each, keyed by paper id. Delivery is
-at-least-once and every database write is an upsert, so a replayed or duplicated message is
-harmless. Messages that fail after three attempts go to a `papers.failed` topic with their
-original payload, so they can be inspected and replayed.
 
 ## Architecture
 
-**Components**
+```mermaid
+flowchart TB
+    arxiv[("arXiv")]
+    redis[("Redis<br/>seen-set · rate limit · cache")]
+    poller["<b>poller</b> · Rust<br/>new papers every 15 min"]
+    new(["papers.new"])
+    fetcher["<b>fetcher</b> · Rust<br/>full text → 512-token chunks"]
+    chunked(["papers.chunked"])
+    llm[["<b>Ollama / vLLM</b><br/>bge-m3 · Qwen2.5-7B"]]
+    fast["<b>worker-abstract</b> · Python<br/>embed title + abstract"]
+    worker["<b>worker</b> · Python<br/>embed chunks + summarize"]
+    pg[("Postgres<br/>+ pgvector")]
+    api["<b>web UI + API</b> · FastAPI<br/>hybrid search · watches"]
+    you(("you"))
 
-| Stage | Language | Reads | Writes | Job |
-|---|---|---|---|---|
-| poller | Rust | arXiv API | `papers.new` | Polls each category every 15 min, dedups against a Redis set, emits one message per new paper version |
-| fetcher | Rust | `papers.new` | `papers.chunked`, `papers.failed` | Downloads full text (HTML, then PDF), splits it into 512-token chunks; the only process that downloads from arxiv.org |
-| worker-abstract | Python | `papers.new` | Postgres | Embeds title + abstract so the paper is searchable within seconds |
-| worker | Python | `papers.chunked` | Postgres, `papers.failed` | Embeds every chunk, writes a summary, replaces the abstract-only row |
-| query API | Python (FastAPI) | HTTP | — | `/search`, `/papers/{id}`, `/stats`, `/metrics`; semantic cache in front of the vector search |
-
-**Data**
-
-- **Redpanda** (Kafka API): `papers.new`, `papers.chunked`, `papers.failed`. Six partitions each,
-  keyed by arXiv id. Consumers commit offsets manually after each message; delivery is
-  at-least-once.
-- **Postgres + pgvector**: `papers`, `authors`, `paper_authors`, `chunks` (`vector(1024)` with an
-  HNSW cosine index). One transaction per paper; every write is an upsert, so replays converge.
-- **Redis**: `arxiv:seen` (which paper versions have been produced), `arxiv:ratelimit` (the shared
-  request budget), and the vector index behind the semantic cache.
-
-**Contracts shared by both languages**
-
-- `schemas/messages.v1.json` defines `paper`, `chunk`, `chunked` and `failed`. Rust compiles it in,
-  Python loads it; every message is validated on the way out and on the way in, and each side's
-  tests check messages produced by the other.
-- `schemas/ratelimit.lua` is the arXiv request budget: an atomic slot reservation on the Redis
-  clock that returns how long to sleep. Poller, fetcher and backfill all call it before every
-  request, so the system as a whole never sends faster than one request per three seconds, which is
-  arXiv's rule across all of a user's machines.
-
-**Inference**
-
-Embeddings (`BAAI/bge-m3`, 1024-d) and summaries (`Qwen2.5-7B-Instruct`) come from an
-OpenAI-compatible HTTP endpoint. vLLM on a DGX Spark is the intended server; Ollama on the laptop
-serves the same two endpoints and is what the defaults point at. Chunks are sized with the embedding
-model's own tokenizer so token counts are exact.
-
-**Failure handling**
-
-- Transient errors retry three times with backoff, then the message goes to `papers.failed` with its
-  original payload attached; malformed messages go there immediately.
-- A paper with no extractable text is stored abstract-only, not failed.
-- An abstract-only write never replaces stored full text for the same version, so the two consumers
-  of `papers.new` can run in any order and either topic can be replayed from the start.
-- Database connections are autocommit with every write in an explicit transaction block, and shared
-  author rows are locked in a fixed order, so concurrent writers neither lose commits nor deadlock.
-
-**Operations**
-
-Every stage exports Prometheus metrics; a compose profile runs Prometheus and Grafana with one
-provisioned dashboard (throughput per stage, arXiv request rate, latency percentiles, dead letters,
-cache hit rate, consumer lag). Another profile runs the five services as containers. CI runs
-rustfmt, clippy, cargo test, ruff, pytest, and validates the schema and the compose file.
-
-The reasoning behind each choice, including the ones that came out of running the system for a day,
-is in [`DECISIONS.md`](DECISIONS.md). [`SPEC.md`](SPEC.md) has the design, [`STATUS.md`](STATUS.md)
-the live-run log, [`BENCHMARKS.md`](BENCHMARKS.md) the measurements.
-
-## Running it
-
-```
-cp .env.example .env               # defaults: the compose stack below and a local Ollama
-./scripts/dev.sh                   # Redpanda + Console, Postgres/pgvector, Redis; topics; migrations
-ollama pull bge-m3 && ollama pull qwen2.5:7b-instruct
-
-scripts/pipeline.sh poller --once  # first run collects the ~2000 most recent papers per category
-scripts/pipeline.sh worker-abstract
-scripts/pipeline.sh api            # http://localhost:8000/docs
-curl -X POST localhost:8000/search -H 'content-type: application/json' \
-     -d '{"query":"diffusion policy for robot manipulation","k":5,"categories":["cs.RO"]}'
+    arxiv --> poller --> new --> fetcher --> chunked --> worker --> pg
+    arxiv --> fetcher
+    new --> fast --> pg
+    pg --> api --> you
+    redis -.- poller & fetcher
+    llm -.- fast & worker
 ```
 
-Add `scripts/pipeline.sh fetcher` and `scripts/pipeline.sh worker` for full text and summaries.
-`scripts/run.sh start` launches all five detached with logs in `data/logs/`; `scripts/run.sh stop`
-lets each finish its current message first. Or run the whole thing in containers:
+1. The **poller** asks arXiv for each category's newest papers and stops at the ones it has already
+   seen (a Redis set). Each new paper becomes one message on `papers.new`.
+2. The **fast path** (`worker-abstract`) embeds the title and abstract and writes the paper to Postgres.
+   From that moment the paper is searchable.
+3. The **fetcher**, the only process that downloads from arxiv.org, gets the full text. It tries the
+   HTML version first (real section headings) and falls back to the PDF. It then splits the text into
+   512-token chunks with the embedding model's own tokenizer.
+4. The **worker** embeds every chunk, writes a 2–3 sentence summary, and replaces the abstract-only row
+   in one transaction.
+5. **Search** blends vector similarity over the chunks with keyword matching on titles and abstracts,
+   keeps the best passage per paper, and caches answers in Redis. Paraphrases of a recent query come
+   straight from the cache.
 
-```
-docker compose --profile pipeline build && docker compose --profile pipeline up -d
-docker compose --profile observability up -d    # Prometheus :9090, Grafana :3000
-```
+Delivery is at-least-once and every write is an upsert, so replays and duplicates are harmless.
+Messages that keep failing land on `papers.failed` with their original payload, and
+`scripts/replay_dlq.py` puts them back. One shared Redis budget keeps every arXiv-facing process,
+together, under arXiv's limit of one request per three seconds.
 
-Grafana comes with one dashboard: papers per minute at each stage, arXiv request rate, worker and
-API latency, dead letters, cache hit rate, consumer lag.
+## Using it
 
-## What it has done so far
+| Page | What it does |
+|---|---|
+| `/` | Latest papers; type in the box to search. Paste an arXiv id or URL to jump straight to that paper |
+| `/paper/{id}` | Summary, abstract, indexed sections, similar papers |
+| `/author?name=…` | One author's papers in the index |
+| `/watches` | Saved searches with what's new since your last visit; each has an Atom feed |
+| `/docs` | The JSON API (`POST /search`, `/papers/{id}`, `/papers/{id}/similar`, `/stats`, `/metrics`) |
 
-- Ran unattended for four days: 211 poll cycles, no crashes, both announcement nights in that
-  window picked up (437 and 347 papers). arXiv's API started rate-limiting the poller with 429s on
-  day two despite the 3-second spacing; retries got the papers through, and the poller now backs
-  off properly when that happens.
-- Fetched and chunked the full text of 7,881 papers (95 % from arXiv's HTML) into 235,000 chunks
-  in about ten hours, which is exactly arXiv's rate limit; the worker then embedded and summarized
-  them at about six seconds a paper on the laptop. The database holds 8,054 papers, 7,957 with
-  full text, 239,912 chunks and 8,019 summaries.
-- Search answers in about 58 ms cold and 36 ms from the cache, and holds roughly 86 requests per
-  second on the laptop with no errors; the ceiling is the local embedding model.
-- Retrieval was measured, not assumed: on the full corpus a paper's title finds the paper at rank 1
-  98.6 % of the time, its first abstract sentence 72.5 %, and 96 % of top-5 hits for topical queries
-  land in the expected category. Getting there meant raising pgvector's `ef_search` from 40 to 200
-  once the HNSW index took over from sequential scans.
-- Survived a `kill -9` mid-message: the paper in flight was redelivered and stored again with no
-  gaps, duplicates or orphans.
-- Found three real bugs in its first days of operation (a replay that could overwrite full text, a
-  database connection that had quietly stopped committing, NUL bytes in extracted text). All fixed
-  and written up.
-
-## Layout
-
-```
-schemas/        messages.v1.json (the contract), ratelimit.lua (the shared request budget)
-sql/            tables and the HNSW index
-rust/           common crate, poller, fetcher
-python/         arxiv_common (models, schema, inference client, database), worker, query_api
-observability/  Prometheus config, Grafana dashboard
-inference/      vLLM serve script for the DGX Spark
-scripts/        dev, pipeline, run, smoke test, backfill, retrieval eval, load test
+```bash
+curl -s localhost:8000/search -H 'content-type: application/json' \
+     -d '{"query": "tactile sensing for dexterous grasping", "k": 5, "categories": ["cs.RO"]}'
 ```
 
-Tests: `cd rust && cargo test`, `cd python && uv run pytest`. `./scripts/smoke.sh` checks the
-running stack end to end.
+## Configuration
+
+Settings come from the environment or `.env` (see [`.env.example`](.env.example)). The ones you're most
+likely to change:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ARXIV_CATEGORIES` | `cs.LG,cs.CV,cs.RO` | Categories to follow |
+| `EMBEDDING_URL`, `LLM_URL` | host Ollama | Any OpenAI-compatible server, e.g. vLLM on a GPU box |
+| `SUMMARY_ENABLED` | `true` | Turn LLM summaries off |
+| `HYBRID_SEARCH` | `true` | Keyword + vector ranking; `false` for vector only |
+| `WATCH_MIN_SCORE` | `0.55` | How similar a paper must be to count as a watch match |
+| `API_PORT` | `8000` | Port for the web UI and API |
+
+## Operating it
+
+- **Laptop was off for days?** The poller logs a warning when it can't reach back far enough. Fill
+  the gap through arXiv's bulk interface, starting from the day of your newest paper (needs
+  [uv](https://docs.astral.sh/uv/)): `uv run --project python python scripts/backfill.py --from 2026-09-17`
+- **Browse without polling arXiv:** `scripts/quickstart.sh --no-ingest`
+- **Dashboards:** `docker compose --profile observability up -d` adds Prometheus (:9090) and Grafana
+  (:3000) with a provisioned pipeline dashboard.
+- **Developing:** `scripts/dev.sh` starts only the infrastructure. `scripts/run.sh start` then runs the
+  five services on the host from source, with logs in `data/logs/`.
+
+Tests: `cd rust && cargo test` and `cd python && uv run pytest`. `scripts/smoke.sh` checks a running
+stack end to end.
+
+## Results
+
+- Ran unattended for four days on a laptop (211 poll cycles, no crashes) and indexed 10,394 papers
+  as 309,408 passages, 10,268 of the papers with full text.
+- Searches take about 15 ms in Postgres and 35–65 ms end to end, including embedding the query.
+- Hybrid search finds a paper from its coined name alone 99.7 % of the time in the top 10, up from
+  91.7 % with vectors only, without losing anything on topical queries.
+- Survived `kill -9` mid-message with no lost, duplicated or orphaned rows.
+
+## More
+
+[`DECISIONS.md`](DECISIONS.md) records why each part is built the way it is.
+[`BENCHMARKS.md`](BENCHMARKS.md) has the measurements and how to reproduce them.
+[`STATUS.md`](STATUS.md) is the build and live-run log, and [`SPEC.md`](SPEC.md) the design.
+
+Thank you to arXiv for use of its open access interoperability. This project links to papers on arXiv
+and never redistributes their PDFs.

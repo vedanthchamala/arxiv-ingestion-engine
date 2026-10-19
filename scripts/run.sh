@@ -24,6 +24,12 @@ pattern() {
 pids() { pgrep -f "$(pattern "$1")" 2>/dev/null || true; }
 
 start() {
+  local up
+  up=$(docker compose --profile pipeline ps --status running --services 2>/dev/null | grep -xE 'poller|fetcher|worker|worker-abstract|api' || true)
+  if [[ -n "$up" ]]; then
+    echo "the containerized pipeline is running ($(echo $up)); stop it first: docker compose --profile pipeline stop" >&2
+    exit 1
+  fi
   for n in "$@"; do
     if [[ -n "$(pids "$n")" ]]; then echo "running  $n (pid $(pids "$n" | tr '\n' ' '))"; continue; fi
     ( nohup scripts/pipeline.sh "$n" >>"data/logs/$n.log" 2>&1 & )
