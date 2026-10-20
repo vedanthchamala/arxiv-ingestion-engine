@@ -42,6 +42,7 @@ was made. "Superseded" entries are kept so the reasoning trail stays intact.
 | [35](#35-one-command-setup-containers-plus-the-hosts-ollama) | One-command setup: containers plus the host's Ollama | accepted (amends 29) |
 | [36](#36-gaps-are-reported-and-dead-letters-are-kept) | Poller reports page-cap gaps; the dead-letter topic is kept forever | accepted (amends 3, 11) |
 | [37](#37-high-level-design-pages-the-model-writes-data-the-page-draws-checks-remove-what-the-text-does-not-support) | High-level design pages: the model writes data, the page draws; checks remove what the text does not support | accepted (amends 2) |
+| [38](#38-reading-trail-and-research-webs-what-you-read-not-what-you-clicked) | Reading trail and research webs: what you read, typed edges, suggestions that branch | accepted |
 
 ---
 
@@ -446,4 +447,36 @@ way: prompts carry no example values, and a value with a unit must appear in the
 With both, the same 8 papers keep 10 results and lose 2. The checks catch invented numbers, terms and
 expansions; they cannot catch a plausible but wrong description of a step, and Qwen's output varies
 noticeably between runs, which is why the page names the model and calls itself a reading aid.
+
+## 38. Reading trail and research webs: what you read, not what you clicked
+**Date** 2026-10-20 · **Context** Search answers the question a reader types; exploring a field means
+following what they have actually been reading. The reader asked for a map that grows with their reading,
+keeps their own path visibly separate from what is suggested, gives edges a meaning ("builds on" vs
+"similar to"), lets suggestions branch from any paper they go on to read, and starts a new map when they
+wander into a different area. **Decision** (a) *Path.* A paper joins the reader's path after 10 seconds of
+**visible** time on its page (a beacon that pauses while the tab is hidden) or an explicit "Add now"; a
+quick misclick or a background tab never counts. (b) *Webs.* A paper read from a suggestion joins that
+suggestion's web, which is the branch. Any other paper joins the web where it is among the 50 nearest
+papers (title + abstract embedding, a partial HNSW index on chunk 0, 1.8 ms) of one of that web's five
+latest papers, closest match first; otherwise it starts a new web named after the search that led to it.
+The rule is rank-based because bge-m3 similarities are compressed: a paper's 50th neighbour sits near 0.63
+cosine while one random same-category pair in ten scores 0.58 or more, so a fixed cut-off checked against
+every paper of a growing web would absorb unrelated papers almost half the time; the rank rule admits a
+random paper about 2 % of the time. Webs can be renamed, papers moved or removed. (c) *Edges.* Citations
+come from Semantic Scholar's batch endpoint (references and citing papers, one request per 500 papers,
+optional `S2_API_KEY`) with the paper's arXiv HTML bibliography as a fallback (LaTeXML structured entries and
+hand-written IEEE ones, titles matched to the index); a result fetched while Semantic Scholar was busy is
+stored as `partial` and retried a day later. (d) *Suggestions.* From the web's eight latest path papers,
+newest weighted highest: what they cite (a reference shared by several path papers outweighs one entry in
+one bibliography), what cites them, and their nearest papers. Papers on any path and dismissed ones are
+excluded, each source paper contributes at most four, papers outside the index at most a third, and every
+suggestion keeps its reasons. (e) *Picture.* Cytoscape.js with fCoSE: the path is a bold spine pinned in
+reading order, each suggestion hangs off the path paper behind its strongest reason (all reasons are in the
+side panel), "builds on" is an arrow, "similar" dashed, outside papers dashed outlines. The libraries are
+vendored (MIT, npm integrity checked) so the page works offline. **Consequences** Nothing here needs the
+GPU: assignment and suggestions use stored vectors, so the feature runs while the model server is busy.
+The corpus is a recent slice, so most "builds on" targets are older papers outside the index, shown as
+outside nodes linking to arXiv; brand-new papers have few citing papers yet. Semantic Scholar's keyless pool
+answered 429 on every call during the build, so without a key "follow-up" edges arrive late or not at all
+(the HTML fallback has no citing papers). Single reader, no accounts.
 

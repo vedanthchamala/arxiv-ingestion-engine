@@ -21,9 +21,20 @@ morning.
   architecture figure, results and key terms. Numbers and terms are checked against the paper's text.
 - **Watches.** Save any search and see the papers that arrived since your last visit, or subscribe to
   its Atom feed in any feed reader.
+- **Explore: a map that grows as you read.** Papers you read for 10 seconds join your path, grouped into
+  one web per research area. Each web is drawn as a graph: your path in reading order, and suggestions
+  branching off it — papers yours build on, newer work that builds on them, and the most similar papers.
+  Read a suggestion and it joins your path, and new suggestions branch from it.
 - **Local by default.** Embeddings, summaries and design pages come from Ollama on your machine (or
   vLLM on a GPU box). Paper text only leaves it if you add an Anthropic key so Claude can write the
   design pages too.
+
+<details>
+<summary>Explore: your reading path and the suggestions branching from it</summary>
+
+![Explore graph](docs/explore.png)
+
+</details>
 
 <details>
 <summary>The High-level design page of a paper</summary>
@@ -90,6 +101,9 @@ flowchart TB
 5. **Search** blends vector similarity over the chunks with keyword matching on titles and abstracts,
    keeps the best passage per paper, and caches answers in Redis. Paraphrases of a recent query come
    straight from the cache.
+6. **Explore** records the papers you read (10 visible seconds), groups them into webs by nearest
+   neighbours, and suggests what to read next from three kinds of edges: citations from Semantic Scholar
+   (or the paper's arXiv HTML bibliography), papers citing yours, and the most similar papers in the index.
 
 Delivery is at-least-once and every write is an upsert, so replays and duplicates are harmless.
 Messages that keep failing land on `papers.failed` with their original payload, and
@@ -105,6 +119,7 @@ together, under arXiv's limit of one request per three seconds.
 | `/paper/{id}/design` | High-level design: the method as a flow of steps, the overview figure, results, terms |
 | `/author?name=…` | One author's papers in the index |
 | `/watches` | Saved searches with what's new since your last visit; each has an Atom feed |
+| `/explore` | Your research webs as graphs: your path, suggestions and why each is there |
 | `/docs` | The JSON API (`POST /search`, `/papers/{id}`, `/papers/{id}/similar`, `/papers/{id}/design`, `/stats`) |
 
 ```bash
@@ -125,6 +140,7 @@ likely to change:
 | `HYBRID_SEARCH` | `true` | Keyword + vector ranking; `false` for vector only |
 | `WATCH_MIN_SCORE` | `0.55` | How similar a paper must be to count as a watch match |
 | `ANTHROPIC_API_KEY` | unset | Optional: Claude writes the design pages too (a few cents per paper, cached) |
+| `S2_API_KEY` | unset | Optional but recommended: a free Semantic Scholar key for reliable "builds on" / "follow-up" edges |
 | `API_PORT` | `8000` | Port for the web UI and API |
 
 ## Operating it

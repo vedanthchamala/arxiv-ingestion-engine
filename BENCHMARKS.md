@@ -225,6 +225,35 @@ check rejects all three and still keeps genuine values such as "25-75 MB" (the p
 25 and 75 MB"). Times vary with whether Ollama has the model loaded. Claude has not been measured yet:
 run the same command with `--providers local,claude` once `ANTHROPIC_API_KEY` is set.
 
+## Reading trail and research webs (2026-10-20)
+
+**Web assignment calibration** (10,394 chunk-0 vectors, bge-m3, exact scan; 150 sampled cs.LG/CV/RO papers
+for neighbours, random pairs for the baseline):
+
+| Similarity of a paper to … | p10 | p50 | p90 |
+|---|---|---|---|
+| its 1st nearest neighbour | 0.659 | 0.705 | 0.759 |
+| its 10th | 0.623 | 0.656 | 0.697 |
+| its 50th | 0.598 | 0.627 | 0.662 |
+| a random paper, same primary category (p50 / p90 / p99) | | 0.521 / 0.581 / 0.657 | |
+| a random paper, other category (p50 / p90 / p99) | | 0.499 / 0.559 / 0.611 | |
+
+The gap between "50th neighbour" and "random" is about 0.05-0.1 cosine, too narrow for a fixed threshold
+checked against every paper of a web, hence the rank rule (top 50 neighbours of one of the five latest
+papers). Live replay of a reading session: three Gaussian-splatting SLAM papers landed in one web without
+any context, a LoRA paper and a robot-policy paper each started their own, a robot-policy neighbour joined
+that web, and a paper read from a suggestion stayed in the suggestion's web. Paper-level neighbours take
+1.8 ms with the partial HNSW index on chunk 0.
+
+**Citation coverage.** One Semantic Scholar batch probe (keyless) resolved 3 of 3 corpus papers with
+complete reference lists (57/57, 32/32, 70/70); 61-84 % of references carry an arXiv id; a 2024 paper had 29
+citing papers, the 2026 ones none yet. Every later keyless call in the session got 429 even after 5/15/45 s
+backoff, so the 8 trail papers were filled from the arXiv HTML fallback: 28 to 114 references each, every
+one with a title once hand-written IEEE bibliographies were parsed (one page went from 5 to 31 references),
+and 0-1 per paper resolving to a paper inside the index (the index is a two-month slice; references are
+mostly older). End to end, a 5-paper web's graph builds in 0.54 s cold; reading a suggestion for 10 visible
+seconds in headless Chrome moved it onto the path and produced 4 new suggestions branching from it.
+
 ## How to reproduce
 
 ```
