@@ -705,3 +705,15 @@ def papers_by_norm_title(conn: psycopg.Connection, norms: list[str]) -> list[dic
 
 def citations_for(conn: psycopg.Connection, arxiv_ids: list[str]) -> list[dict]:
     return conn.execute("SELECT * FROM citations WHERE arxiv_id = ANY(%s)", (list(arxiv_ids),)).fetchall()
+
+
+def trail_ids(conn: psycopg.Connection) -> set[str]:
+    return {r["arxiv_id"] for r in conn.execute("SELECT arxiv_id FROM trail").fetchall()}
+
+
+def papers_brief(conn: psycopg.Connection, arxiv_ids: list[str]) -> list[dict]:
+    return conn.execute(
+        "SELECT arxiv_id, title, primary_category, published_at, summary, abstract FROM papers "
+        "WHERE arxiv_id = ANY(%s)",
+        (list(arxiv_ids),),
+    ).fetchall()

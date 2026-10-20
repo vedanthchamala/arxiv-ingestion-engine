@@ -2,13 +2,13 @@
 page that lists each web's path with rename / move / remove."""
 
 from fastapi import APIRouter, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from arxiv_common import db
 from arxiv_common.text import parse_arxiv_id
 
-from . import citations, trail
+from . import citations, recommend, trail
 from .service import settings, state
 from .ui import render
 from .watches import same_origin
@@ -101,3 +101,27 @@ def trail_page(request: Request):
         webs = db.list_webs(conn)
         paths = {w["id"]: db.web_trail(conn, w["id"]) for w in webs}
     return render(request, "trail.html", webs=webs, paths=paths, dwell=trail.DWELL_SECONDS)
+
+
+@router.get("/webs/{web_id}/graph.json")
+def web_graph(web_id: int):
+    with state.pool.connection() as conn:
+        g = recommend.graph(conn, web_id)
+    if g is None:
+        return JSONResponse({"detail": "no such web"}, status_code=404)
+    citations.schedule(state.pool, settings, [n["id"] for n in g["nodes"] if n["kind"] == "path"])
+    return g
+
+
+class Dismiss(BaseModel):
+    key: str = Field(min_length=1, max_length=200)
+
+
+@router.post("/suggestions/dismiss")
+def dismiss(request: Request, body: Dismiss) -> dict:
+    """'Not interested': the suggestion never comes back (arXiv id, or an s2:/title: key)."""
+    same_origin(request)
+    key = parse_arxiv_id(body.key) or body.key
+    with state.pool.connection() as conn:
+        db.dismiss(conn, key)
+    return {"dismissed": key}
