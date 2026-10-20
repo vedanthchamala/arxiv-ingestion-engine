@@ -8,6 +8,7 @@ import psycopg
 from pgvector.psycopg import register_vector
 from psycopg import sql
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 from .models import ChunkedPaper
 from .text import author_norm, strip_nul
@@ -417,3 +418,105 @@ def ingested_at(conn: psycopg.Connection, arxiv_ids: Sequence[str]) -> dict[str,
         "SELECT arxiv_id, ingested_at FROM papers WHERE arxiv_id = ANY(%s)", (list(arxiv_ids),)
     ).fetchall()
     return {r["arxiv_id"]: r["ingested_at"] for r in rows}
+
+
+def design_source(conn: psycopg.Connection, arxiv_id: str) -> list[dict]:
+    """The paper's chunks in order (section, text), chunk 0 (title + abstract) included."""
+    return conn.execute(
+        "SELECT idx, section, text FROM chunks WHERE arxiv_id = %s ORDER BY idx", (arxiv_id,)
+    ).fetchall()
+
+
+def get_design(conn: psycopg.Connection, arxiv_id: str, provider: str) -> dict | None:
+    return conn.execute(
+        "SELECT * FROM paper_designs WHERE arxiv_id = %s AND provider = %s", (arxiv_id, provider)
+    ).fetchone()
+
+
+def list_designs(conn: psycopg.Connection, arxiv_id: str) -> list[dict]:
+    return conn.execute(
+        "SELECT provider, status, model FROM paper_designs WHERE arxiv_id = %s ORDER BY provider", (arxiv_id,)
+    ).fetchall()
+
+
+def claim_design(
+    conn: psycopg.Connection,
+    arxiv_id: str,
+    provider: str,
+    version: int,
+    model: str,
+    prompt_version: int,
+    stale_after_s: int,
+) -> bool:
+    """Mark a design as running unless one is already running (and not stale) or done for this exact
+    paper version, model and prompt. True when the caller should generate it."""
+    row = conn.execute(
+        """
+        INSERT INTO paper_designs (arxiv_id, provider, version, model, prompt_version, status)
+        VALUES (%(id)s, %(p)s, %(v)s, %(m)s, %(pv)s, 'running')
+        ON CONFLICT (arxiv_id, provider) DO UPDATE SET
+            version = EXCLUDED.version, model = EXCLUDED.model, prompt_version = EXCLUDED.prompt_version,
+            status = 'running', design = NULL, rejected = '[]', error = NULL, input_tokens = NULL,
+            output_tokens = NULL, cost_usd = NULL, seconds = NULL, started_at = now(), finished_at = NULL
+        WHERE paper_designs.status = 'failed'
+           OR (paper_designs.status = 'running'
+               AND paper_designs.started_at < now() - make_interval(secs => %(stale)s))
+           OR (paper_designs.status = 'done'
+               AND (paper_designs.version, paper_designs.model, paper_designs.prompt_version)
+                   IS DISTINCT FROM (EXCLUDED.version, EXCLUDED.model, EXCLUDED.prompt_version))
+        RETURNING arxiv_id
+        """,
+        {
+            "id": arxiv_id,
+            "p": provider,
+            "v": version,
+            "m": model,
+            "pv": prompt_version,
+            "stale": stale_after_s,
+        },
+    ).fetchone()
+    return row is not None
+
+
+def reset_design(conn: psycopg.Connection, arxiv_id: str, provider: str) -> None:
+    conn.execute(
+        "UPDATE paper_designs SET status = 'failed', error = 'regenerate requested' "
+        "WHERE arxiv_id = %s AND provider = %s AND status <> 'running'",
+        (arxiv_id, provider),
+    )
+
+
+def finish_design(conn: psycopg.Connection, arxiv_id: str, provider: str, **fields) -> None:
+    cols = ("status", "design", "rejected", "error", "input_tokens", "output_tokens", "cost_usd", "seconds")
+    values = {k: fields.get(k) for k in cols}
+    for k in ("design", "rejected"):
+        if values[k] is not None:
+            values[k] = Jsonb(values[k])
+    if values["rejected"] is None:
+        values["rejected"] = Jsonb([])
+    conn.execute(
+        """
+        UPDATE paper_designs SET status = %(status)s, design = %(design)s, rejected = %(rejected)s,
+               error = %(error)s, input_tokens = %(input_tokens)s, output_tokens = %(output_tokens)s,
+               cost_usd = %(cost_usd)s, seconds = %(seconds)s, finished_at = now()
+        WHERE arxiv_id = %(arxiv_id)s AND provider = %(provider)s
+        """,
+        {**values, "arxiv_id": arxiv_id, "provider": provider},
+    )
+
+
+def get_figures(conn: psycopg.Connection, arxiv_id: str) -> dict | None:
+    return conn.execute("SELECT * FROM paper_figures WHERE arxiv_id = %s", (arxiv_id,)).fetchone()
+
+
+def store_figures(
+    conn: psycopg.Connection, arxiv_id: str, version: int, status: str, figures: list[dict], error: str | None
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO paper_figures (arxiv_id, version, status, figures, error) VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (arxiv_id) DO UPDATE SET version = EXCLUDED.version, status = EXCLUDED.status,
+            figures = EXCLUDED.figures, error = EXCLUDED.error, fetched_at = now()
+        """,
+        (arxiv_id, version, status, Jsonb(figures), error),
+    )

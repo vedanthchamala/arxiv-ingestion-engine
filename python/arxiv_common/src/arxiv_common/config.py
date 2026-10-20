@@ -29,6 +29,12 @@ class Settings:
     hnsw_ef_search: int = field(default_factory=lambda: int(_env("HNSW_EF_SEARCH", "200")))
     hybrid_search: bool = field(default_factory=lambda: _env("HYBRID_SEARCH", "true").lower() == "true")
     watch_min_score: float = field(default_factory=lambda: float(_env("WATCH_MIN_SCORE", "0.55")))
+    design_provider: str = field(default_factory=lambda: _env("DESIGN_PROVIDER", "local"))
+    design_claude_model: str = field(default_factory=lambda: _env("DESIGN_CLAUDE_MODEL", "claude-opus-5-5"))
+    arxiv_user_agent: str = field(default_factory=lambda: _env("ARXIV_USER_AGENT", "arxiv-ingest/0.1"))
+    arxiv_min_interval_s: float = field(
+        default_factory=lambda: float(_env("ARXIV_MIN_REQUEST_INTERVAL_SECS", "3"))
+    )
     metrics_port: int = field(default_factory=lambda: int(_env("METRICS_PORT", "9103")))
     categories: tuple[str, ...] = field(
         default_factory=lambda: tuple(

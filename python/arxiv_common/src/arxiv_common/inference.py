@@ -1,5 +1,6 @@
 """Client for OpenAI-compatible inference servers (vLLM on the Spark, Ollama locally)."""
 
+import json
 from dataclasses import dataclass
 
 import httpx
@@ -94,6 +95,28 @@ class InferenceClient:
         if not content:
             raise InferenceError("empty summary")
         return content
+
+    def complete_json(
+        self, system: str, user: str, schema: dict, max_tokens: int = 2000
+    ) -> tuple[dict, dict]:
+        """One chat completion constrained to a JSON schema (`response_format`, supported by vLLM and
+        Ollama). Returns (parsed object, usage). ValueError on truncated or unparseable output."""
+        body = {
+            "model": self.settings.llm_model,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            "max_tokens": max_tokens,
+            "temperature": 0.2,
+            "response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": schema}},
+        }
+        resp = self._llm.post("/chat/completions", json=body)
+        if not _ok_or_retryable(resp):
+            raise InferenceError(f"chat {resp.status_code}: {resp.text[:300]}")
+        resp.raise_for_status()
+        data = resp.json()
+        choice = data["choices"][0]
+        if choice.get("finish_reason") == "length":
+            raise ValueError(f"output truncated at max_tokens={max_tokens}")
+        return json.loads(choice["message"]["content"]), data.get("usage") or {}
 
 
 def _ok_or_retryable(resp: httpx.Response) -> bool:
