@@ -449,3 +449,20 @@ def test_overview_figure_choice():
 def test_design_model_defaults():
     d = Design(one_liner="a", problem="b", key_idea="c", steps=[])
     assert d.results == [] and d.limitations == [] and d.overview_figure == 0
+
+
+def test_a_result_with_a_unit_must_appear_with_that_unit():
+    results = [
+        {"value": "130 KB/s", "label": "uplink"},
+        {"value": "130 ms", "label": "an example value copied into the wrong paper"},
+        {"value": "10", "label": "a bare number"},
+    ]
+
+    checked = validate(raw(results=results), source(), "f.")
+
+    assert [r.value for r in checked.design.results] == ["130 KB/s", "10"]
+    assert checked.rejected[0]["reason"] == "number not in the text with this unit"
+
+
+def test_prompts_carry_no_example_values():
+    assert "130" not in design.LOCAL_SYSTEM and "130" not in design.CLAUDE_SYSTEM

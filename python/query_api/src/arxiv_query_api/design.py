@@ -27,7 +27,8 @@ from . import figures as figs
 
 log = structlog.get_logger()
 
-PROMPT_VERSION = 2
+# 3: no example values in the prompts (v2's "130 KB/s" example was copied into unrelated papers)
+PROMPT_VERSION = 3
 STALE_AFTER_S = 900
 MAX_STEPS = 6
 SOURCE_CHARS = {"local": 24_000, "claude": 60_000}
@@ -94,8 +95,8 @@ reading it. Use only facts stated in the paper text you are given.
 - steps: 3 to 6 steps in the order data flows through the method. name: 2 to 5 words. input, does, \
 output, why: one short plain phrase or sentence each; the output of a step is usually the input of the \
 next. section: the title of the section that describes the step, copied exactly.
-- results: up to 3 headline numbers copied exactly from the text. value: only the number and its unit \
-(for example "130 KB/s" or "+12.4%"); label: what it measures.
+- results: up to 3 headline numbers copied exactly from the text. value: only the number and its unit, \
+written exactly as in the text; label: what it measures. Leave results empty if the text gives no numbers.
 - terms: up to 4 terms a newcomer needs, with the meaning the text gives. Never expand an acronym \
 unless the text spells the expansion out.
 - overview_figure: the number of the figure that shows the overall design, or 0 if none does."""
@@ -117,8 +118,8 @@ should connect, the output of one feeding the next. does: one sentence. why: one
 would go wrong without the step. detail: two or three sentences on how it works, for a reader who \
 wants more. evidence: a short verbatim quote, under 30 words, from the text that supports the step. \
 section: the title of the section the step comes from, copied exactly.
-- results: up to 4 headline numbers copied exactly. value: only the number and its unit (for example \
-"130 KB/s" or "+12.4%"); label: what it measures and, if the text says, the baseline it is compared with.
+- results: up to 4 headline numbers copied exactly. value: only the number and its unit, written exactly \
+as in the text; label: what it measures and, if the text says, the baseline it is compared with.
 - terms: up to 5 terms a newcomer needs, defined the way the paper uses them.
 - limitations: up to 3 limitations the paper itself states; empty if it states none.
 - overview_figure: the number of the figure that best shows the overall architecture, or 0."""
@@ -320,6 +321,19 @@ def _words_in(phrase: str, text: str) -> bool:
     return re.search(r"\b" + r"\W+(?:\w+\W+){0,2}?".join(map(re.escape, words)), text) is not None
 
 
+_LEAD_NUMBER = re.compile(r"^[~<>+\-]*\s*(\d+(?:[.,]\d+)?)\s*(\S*)")
+
+
+def _with_unit(value: str, text: str) -> bool:
+    """A value with a unit ("130 KB/s", "84.1%") must appear with that unit in the text: the bare number
+    alone is too common to prove anything (a model copied an example value into papers that happened to
+    contain "130" elsewhere)."""
+    m = _LEAD_NUMBER.match(norm(value))
+    if not m or not m.group(2):
+        return True
+    return re.search(re.escape(m.group(1)) + r"\s*" + re.escape(m.group(2)), text) is not None
+
+
 def _match_section(name: str, sections: list[str]) -> str:
     n = norm(name)
     if not n:
@@ -362,7 +376,15 @@ def validate(raw: dict, source: Source, fallback_one_liner: str) -> Checked:
     kept = []
     for r in d.results:
         nums = _numbers(r.value)
-        if not nums or not nums <= numbers:
+        if nums and nums <= numbers and not _with_unit(r.value, text):
+            rejected.append(
+                {
+                    "kind": "result",
+                    "claim": f"{r.value}: {r.label}",
+                    "reason": "number not in the text with this unit",
+                }
+            )
+        elif not nums or not nums <= numbers:
             rejected.append(
                 {"kind": "result", "claim": f"{r.value}: {r.label}", "reason": "number not in the text"}
             )
