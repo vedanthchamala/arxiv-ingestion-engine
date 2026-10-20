@@ -648,3 +648,60 @@ def dismiss(conn: psycopg.Connection, key: str) -> None:
 
 def dismissed_keys(conn: psycopg.Connection) -> set[str]:
     return {r["key"] for r in conn.execute("SELECT key FROM dismissed").fetchall()}
+
+
+# -- citations -----------------------------------------------------------------------------------
+
+_NORM_TITLE = "btrim(regexp_replace(lower(title), '[^a-z0-9]+', ' ', 'g'))"
+
+
+def citation_fetched(conn: psycopg.Connection, arxiv_ids: list[str]) -> set[str]:
+    """Papers whose citation edges are cached (failed and partial fetches are retried after a day)."""
+    rows = conn.execute(
+        "SELECT arxiv_id FROM citation_fetches WHERE arxiv_id = ANY(%s) "
+        "AND (status NOT IN ('failed', 'partial') OR fetched_at > now() - interval '1 day')",
+        (list(arxiv_ids),),
+    ).fetchall()
+    return {r["arxiv_id"] for r in rows}
+
+
+def store_citations(
+    conn: psycopg.Connection, arxiv_id: str, source: str, status: str, edges: list[dict], error: str | None
+) -> None:
+    with conn.transaction():
+        conn.execute("DELETE FROM citations WHERE arxiv_id = %s", (arxiv_id,))
+        with conn.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO citations (arxiv_id, direction, other_key, other_arxiv_id, title, year) "
+                "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
+                [
+                    (arxiv_id, e["direction"], e["other_key"], e["other_arxiv_id"], e["title"], e["year"])
+                    for e in edges
+                ],
+            )
+        conn.execute(
+            """
+            INSERT INTO citation_fetches (arxiv_id, source, status, refs, cites, error)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (arxiv_id) DO UPDATE SET source = EXCLUDED.source, status = EXCLUDED.status,
+                refs = EXCLUDED.refs, cites = EXCLUDED.cites, error = EXCLUDED.error, fetched_at = now()
+            """,
+            (
+                arxiv_id,
+                source,
+                status,
+                sum(e["direction"] == "cites" for e in edges),
+                sum(e["direction"] == "cited_by" for e in edges),
+                error,
+            ),
+        )
+
+
+def papers_by_norm_title(conn: psycopg.Connection, norms: list[str]) -> list[dict]:
+    return conn.execute(
+        f"SELECT arxiv_id, {_NORM_TITLE} AS norm FROM papers WHERE {_NORM_TITLE} = ANY(%s)", (norms,)
+    ).fetchall()
+
+
+def citations_for(conn: psycopg.Connection, arxiv_ids: list[str]) -> list[dict]:
+    return conn.execute("SELECT * FROM citations WHERE arxiv_id = ANY(%s)", (list(arxiv_ids),)).fetchall()

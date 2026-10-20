@@ -223,6 +223,7 @@ services:
       DESIGN_PROVIDER: ${DESIGN_PROVIDER:-local}
       DESIGN_CLAUDE_MODEL: ${DESIGN_CLAUDE_MODEL:-claude-opus-5-5}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      S2_API_KEY: ${S2_API_KEY:-}     # optional: Semantic Scholar key for citation edges on the trail
     ports:
       - "${API_PORT:-8000}:8000"   # host port is overridable: API_PORT=8001 in .env
     depends_on:

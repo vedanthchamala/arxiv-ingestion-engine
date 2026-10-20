@@ -30,6 +30,7 @@ class Settings:
     hybrid_search: bool = field(default_factory=lambda: _env("HYBRID_SEARCH", "true").lower() == "true")
     watch_min_score: float = field(default_factory=lambda: float(_env("WATCH_MIN_SCORE", "0.55")))
     design_provider: str = field(default_factory=lambda: _env("DESIGN_PROVIDER", "local"))
+    s2_api_key: str = field(default_factory=lambda: _env("S2_API_KEY", ""))
     design_claude_model: str = field(default_factory=lambda: _env("DESIGN_CLAUDE_MODEL", "claude-opus-5-5"))
     arxiv_user_agent: str = field(default_factory=lambda: _env("ARXIV_USER_AGENT", "arxiv-ingest/0.1"))
     arxiv_min_interval_s: float = field(

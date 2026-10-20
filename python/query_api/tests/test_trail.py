@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from arxiv_common import db
-from arxiv_query_api import trail, ui
+from arxiv_query_api import citations, trail, ui
 from arxiv_query_api.main import app, state
 
 CONN = object()
@@ -176,6 +176,7 @@ def dbm():
         patch.object(
             trail, "record_read", return_value=trail.Read("2608.26868", 2, "SLAM", True, False)
         ) as rec,
+        patch.object(citations, "schedule") as schedule,
     ):
         yield SimpleNamespace(
             get_paper=get_paper,
@@ -188,6 +189,7 @@ def dbm():
             list_webs=list_webs,
             web_trail=web_trail,
             record=rec,
+            schedule=schedule,
         )
 
 
@@ -225,6 +227,7 @@ def test_beacon_records_a_read(client, dbm):
     assert args[1]["arxiv_id"] == "2608.26868"
     assert kwargs == {"via": "2601.00001", "kind": "similar", "query": "slam", "web_hint": 2}
     dbm.get_paper.assert_called_once_with(CONN, "2608.26868")
+    assert dbm.schedule.call_args.args[2] == ["2608.26868"]
 
 
 def test_beacon_refuses_cross_origin_and_unknown_papers(client, dbm):

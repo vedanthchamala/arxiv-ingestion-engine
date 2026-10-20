@@ -101,9 +101,9 @@ def overview_figure(figures: list[dict], chosen: int | None = None) -> dict | No
     return by_n.get(1)
 
 
-def fetch_figures(html_url: str, settings: Settings) -> tuple[str, list[dict], str | None]:
-    """(status, figures, error). One GET, after reserving a slot in the arXiv budget shared with the
-    poller, fetcher and backfill (decision 27)."""
+def fetch_html(html_url: str, settings: Settings) -> tuple[str, str | None, str | None, str]:
+    """(status, html, error, final url). One GET, after reserving a slot in the arXiv budget shared with
+    the poller, fetcher and backfill (decision 27)."""
     limiter = SharedMinInterval(
         redis.Redis.from_url(settings.redis_url), settings.arxiv_min_interval_s + 0.05, DEFAULT_KEY
     )
@@ -113,11 +113,19 @@ def fetch_figures(html_url: str, settings: Settings) -> tuple[str, list[dict], s
             html_url, headers={"User-Agent": settings.arxiv_user_agent}, timeout=60, follow_redirects=True
         )
     except httpx.HTTPError as e:
-        return "failed", [], f"{type(e).__name__}: {e}"
+        return "failed", None, f"{type(e).__name__}: {e}", html_url
     if r.status_code == 404:
-        return "none", [], None
+        return "none", None, None, html_url
     if r.status_code != 200:
-        return "failed", [], f"HTTP {r.status_code}"
-    figures = parse_figures(r.text, str(r.url))
+        return "failed", None, f"HTTP {r.status_code}", html_url
+    return "done", r.text, None, str(r.url)
+
+
+def fetch_figures(html_url: str, settings: Settings) -> tuple[str, list[dict], str | None]:
+    """(status, figures, error)."""
+    status, html, error, url = fetch_html(html_url, settings)
+    if html is None:
+        return status, [], error
+    figures = parse_figures(html, url)
     log.info("figures fetched", url=html_url, figures=len(figures))
     return "done", figures, None

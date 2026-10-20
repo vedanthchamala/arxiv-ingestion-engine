@@ -8,8 +8,8 @@ from pydantic import BaseModel, Field
 from arxiv_common import db
 from arxiv_common.text import parse_arxiv_id
 
-from . import trail
-from .service import state
+from . import citations, trail
+from .service import settings, state
 from .ui import render
 from .watches import same_origin
 
@@ -32,7 +32,10 @@ def _record(arxiv_id: str, via: str | None, kind: str | None, q: str | None, web
         paper = db.get_paper(conn, canonical) if canonical else None
         if paper is None:
             raise HTTPException(404, f"{arxiv_id} not ingested")
-        return trail.record_read(conn, paper, via=via, kind=kind, query=q, web_hint=web)
+        r = trail.record_read(conn, paper, via=via, kind=kind, query=q, web_hint=web)
+    if not r.already:
+        citations.schedule(state.pool, settings, [r.arxiv_id])
+    return r
 
 
 @router.post("/trail/read")
