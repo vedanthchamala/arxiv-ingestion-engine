@@ -464,5 +464,15 @@ def test_a_result_with_a_unit_must_appear_with_that_unit():
     assert checked.rejected[0]["reason"] == "number not in the text with this unit"
 
 
+def test_a_range_needs_its_unit_on_the_number_that_carries_it():
+    chunks = [*CHUNKS, {"idx": 5, "section": "3 Method", "text": "Final maps take between 25 and 75 MB."}]
+    src = build_source("T", chunks, [], budget=10_000)
+    results = [{"value": "25-75 MB", "label": "map size"}, {"value": "84.1%", "label": "not there"}]
+
+    checked = validate(raw(results=results), src, "f.")
+
+    assert [r.value for r in checked.design.results] == ["25-75 MB"]
+
+
 def test_prompts_carry_no_example_values():
     assert "130" not in design.LOCAL_SYSTEM and "130" not in design.CLAUDE_SYSTEM

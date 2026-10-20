@@ -321,15 +321,15 @@ def _words_in(phrase: str, text: str) -> bool:
     return re.search(r"\b" + r"\W+(?:\w+\W+){0,2}?".join(map(re.escape, words)), text) is not None
 
 
-_LEAD_NUMBER = re.compile(r"^[~<>+\-]*\s*(\d+(?:[.,]\d+)?)\s*(\S*)")
+_NUMBER_WITH_UNIT = re.compile(r"(\d+(?:[.,]\d+)?)\s*([a-z%°µ][^\s,;)]*)")
 
 
 def _with_unit(value: str, text: str) -> bool:
     """A value with a unit ("130 KB/s", "84.1%") must appear with that unit in the text: the bare number
     alone is too common to prove anything (a model copied an example value into papers that happened to
     contain "130" elsewhere)."""
-    m = _LEAD_NUMBER.match(norm(value))
-    if not m or not m.group(2):
+    m = _NUMBER_WITH_UNIT.search(norm(value))  # in "25-75 MB" the unit belongs to 75
+    if not m:
         return True
     return re.search(re.escape(m.group(1)) + r"\s*" + re.escape(m.group(2)), text) is not None
 
