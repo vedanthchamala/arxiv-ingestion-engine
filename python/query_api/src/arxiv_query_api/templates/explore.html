@@ -1,9 +1,12 @@
 {% extends "base.html" %}
 {% block title %}{% if web %}{{ web.name }} · {% endif %}Explore · arXiv search{% endblock %}
-{% block head %}<script>document.documentElement.classList.add("js")</script>{% endblock %}
+{% block head %}<script>document.documentElement.classList.add("js")</script>
+<link rel="preload" href="{{ url_for('static', path='fonts/ibm-plex-sans-condensed-latin-400-normal.woff2') }}" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="{{ url_for('static', path='explore.css') }}">{% endblock %}
 {% block main_class %}wide{% endblock %}
 {% set reason_text = {"builds_on": "cited by", "follow_up": "builds on", "similar": "similar to"} %}
 {% block content %}
+<div class="explore-page">
 {% if not web %}
 <p class="eyebrow">Explore</p>
 <h1 class="page-title">Your research webs</h1>
@@ -25,33 +28,36 @@
 </nav>
 {% endif %}
 
-<div class="explore">
-  <div class="graph-wrap">
-    <div id="graph" class="graph" aria-label="Graph of your path and suggested papers" role="application"></div>
-    <div class="graph-legend" aria-hidden="true">
-      <span><i class="lg-path"></i>your path</span>
-      <span><i class="lg-cites"></i>builds on</span>
-      <span><i class="lg-similar"></i>similar to</span>
-      <span><i class="lg-node"></i>suggestion</span>
-      <span><i class="lg-external"></i>outside this index</span>
+<section class="sky" aria-label="Star chart of your path and suggested papers">
+  <div class="sky-graph">
+    <div id="graph" role="application" aria-label="Graph of your path and suggested papers. Tab to a star, Enter to open it."></div>
+    <div class="sky-tools">
+      <button type="button" class="sky-btn" id="fit">Fit</button>
+      <a class="sky-btn" href="/explore/{{ web.id }}?limit={{ [limit + 8, 40] | min }}">More suggestions</a>
     </div>
-    <div class="graph-tools">
-      <button type="button" class="tool" id="fit">Fit</button>
-      <a class="tool" href="/explore/{{ web.id }}?limit={{ [limit + 8, 40] | min }}" id="more">More suggestions</a>
+    <div class="sky-legend" id="legend" aria-hidden="true">
+      <span><svg width="30" height="8"><line class="lg-gold" x1="3" y1="4" x2="27" y2="4" stroke-width="2.2"/><circle class="lg-gold" cx="3" cy="4" r="3"/><circle class="lg-gold" cx="27" cy="4" r="3"/></svg>your path</span>
+      <span><svg width="28" height="8"><line class="lg-teal" x1="1" y1="4" x2="21" y2="4" stroke-width="1.3"/><path class="lg-teal" d="M20 0.6 L27.5 4 L20 7.4 L22 4 Z"/></svg>builds on</span>
+      <span><svg width="28" height="8"><line class="lg-dots" x1="2" y1="4" x2="27" y2="4" stroke-width="1.5"/></svg>similar topic</span>
+      <span><svg width="8" height="8"><circle class="lg-deep" cx="4" cy="4" r="3.5"/></svg>not in your index</span>
+      <span><svg width="26" height="10"><circle class="lg-star" cx="2" cy="5" r="2"/><circle class="lg-star" cx="10" cy="5" r="3.2"/><circle class="lg-star" cx="21" cy="5" r="5"/></svg>more strongly linked</span>
     </div>
+    <div class="sky-tip" id="tip" hidden></div>
   </div>
-  <aside class="panel" id="panel" aria-live="polite">
-    <p class="panel-hint">
-      The orange line is your path in reading order. The papers around it are suggestions: what your papers
-      build on, newer work that builds on them, and the most similar papers in the index.
-      Pick one to see why it is here. Reading a suggestion for {{ dwell }} seconds adds it to your path, and new
-      suggestions branch from it.
-    </p>
+  <aside class="sky-panel" id="panel" aria-live="polite" data-dwell="{{ dwell }}">
+    <p class="p-kicker">Reading the chart</p>
+    <p class="p-intro">Your path is the gold constellation, numbered in the order you read it. Every other star is a suggestion that branches from it.</p>
+    <ul class="p-key">
+      <li><svg height="8"><line class="lg-teal" x1="1" y1="4" x2="21" y2="4" stroke-width="1.3"/><path class="lg-teal" d="M20 0.6 L27.5 4 L20 7.4 L22 4 Z"/></svg>an arrow reads “builds on”: it points at the earlier work</li>
+      <li><svg height="8"><line class="lg-dots" x1="2" y1="4" x2="27" y2="4" stroke-width="1.5"/></svg>dots join papers on a similar topic</li>
+      <li><svg height="10"><circle class="lg-star" cx="2" cy="5" r="2"/><circle class="lg-star" cx="10" cy="5" r="3.2"/><circle class="lg-star" cx="21" cy="5" r="5"/></svg>bigger stars are more strongly linked to your path</li>
+    </ul>
+    <p class="p-intro">Hover a star to trace its links; click it to read about it. Reading a suggestion for {{ dwell }} seconds adds it to your path, and new suggestions branch from it.</p>
     {% if graph.pending_citations %}
-    <p class="fine">Citation links for {{ graph.pending_citations }} of your papers are still being fetched; reload in a minute for more “builds on” edges.</p>
+    <p class="p-fine">Citation links for {{ graph.pending_citations }} of your papers are still being fetched; reload in a minute for more “builds on” arrows.</p>
     {% endif %}
   </aside>
-</div>
+</section>
 
 <div class="graph-lists">
   <section>
@@ -87,10 +93,8 @@
 </div>
 
 <script id="graph-data" type="application/json">{{ graph | tojson }}</script>
-<script src="{{ url_for('static', path='vendor/cytoscape-3.34.3.min.js') }}"></script>
-<script src="{{ url_for('static', path='vendor/layout-base-2.0.1.js') }}"></script>
-<script src="{{ url_for('static', path='vendor/cose-base-2.2.0.js') }}"></script>
-<script src="{{ url_for('static', path='vendor/cytoscape-fcose-2.2.0.js') }}"></script>
+<script src="{{ url_for('static', path='vendor/d3-7.9.0.min.js') }}"></script>
 <script src="{{ url_for('static', path='explore.js') }}"></script>
 {% endif %}
+</div>
 {% endblock %}

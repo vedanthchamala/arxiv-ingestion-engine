@@ -1,0 +1,174 @@
+/* Explore: each research web as a star chart (decision 38). Always dark: it is a night sky in either theme. */
+@font-face { font-family: "Fraunces"; src: url(fonts/fraunces-latin-opsz-normal.woff2) format("woff2-variations"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "Plex Condensed"; src: url(fonts/ibm-plex-sans-condensed-latin-400-normal.woff2) format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Plex Condensed"; src: url(fonts/ibm-plex-sans-condensed-latin-500-normal.woff2) format("woff2"); font-weight: 500; font-display: swap; }
+@font-face { font-family: "Plex Condensed"; src: url(fonts/ibm-plex-sans-condensed-latin-600-normal.woff2) format("woff2"); font-weight: 600; font-display: swap; }
+@font-face { font-family: "Plex Mono"; src: url(fonts/ibm-plex-mono-latin-400-normal.woff2) format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Plex Mono"; src: url(fonts/ibm-plex-mono-latin-500-normal.woff2) format("woff2"); font-weight: 500; font-display: swap; }
+
+.explore-page {
+  --sky: #0b1028;
+  --star: #e8eeff;
+  --deep: #9b87f5;
+  --gold: #ffc24b;
+  --teal: #46c7b8;
+  --star-2: rgb(232 238 255 / 0.72);
+  --star-3: rgb(232 238 255 / 0.5);
+  --hair: rgb(232 238 255 / 0.1);
+  --f-display: "Fraunces", var(--serif);
+  --f-label: "Plex Condensed", "IBM Plex Sans Condensed", var(--sans);
+  --f-mono: "Plex Mono", var(--mono);
+}
+.explore-page .page-title { font-family: var(--f-display); font-weight: 560; font-variation-settings: "opsz" 72; letter-spacing: -0.01em; }
+.explore-page .eyebrow { font-family: var(--f-mono); letter-spacing: 0.14em; }
+.explore-page .web-tabs a { font-family: var(--f-label); }
+
+.sky {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  margin-top: 18px;
+  color: var(--star);
+  background: radial-gradient(120% 95% at 32% 18%, #1a2250 0%, var(--sky) 52%, #070a1d 100%);
+  border: 1px solid rgb(232 238 255 / 0.07);
+  border-radius: 18px;
+  overflow: hidden;
+  color-scheme: dark;
+}
+.sky-graph { position: relative; min-width: 0; height: min(76vh, 720px); min-height: 460px; }
+#graph { position: absolute; inset: 0; }
+.sky-svg { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+.sky-svg:active { cursor: grabbing; }
+
+.field circle { fill: var(--star); }
+.grid circle, .grid line { fill: none; stroke: var(--star); stroke-opacity: 0.055; stroke-width: 1; }
+
+.edge path { fill: none; transition: opacity 0.18s; }
+.edge.builds_on .line { stroke: var(--teal); stroke-width: 1.3; }
+.edge.similar .line { stroke: var(--star); stroke-opacity: 0.42; stroke-width: 1.5; stroke-linecap: round; stroke-dasharray: 0.1 4.2; }
+.edge.trail .line { stroke: var(--gold); stroke-width: 2.2; stroke-linecap: round; }
+.edge.trail .glow { stroke: var(--gold); stroke-opacity: 0.16; stroke-width: 8; stroke-linecap: round; }
+.edges { pointer-events: none; }
+
+.star { cursor: pointer; outline: none; transition: opacity 0.18s; }
+.star .hit { fill: transparent; }
+.star .halo { pointer-events: none; }
+.star .core { fill: var(--star); }
+.star.outside .core { fill: var(--deep); }
+.star.path .core { fill: var(--gold); }
+.star .ring { fill: none; stroke: var(--gold); stroke-opacity: 0.55; stroke-width: 1; }
+.star .num { font: 500 9.5px var(--f-mono); fill: var(--sky); text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+.star .reticle { stroke: var(--star); stroke-width: 1.2; stroke-linecap: round; opacity: 0; transition: opacity 0.18s; }
+.star.selected .reticle, .star:focus-visible .reticle { opacity: 0.9; }
+
+.lbl {
+  font: 400 12px/1 var(--f-label);
+  fill: var(--star-2);
+  paint-order: stroke;
+  stroke: var(--sky);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  cursor: pointer;
+  transition: opacity 0.18s;
+}
+.lbl.path { font-weight: 600; font-size: 13px; fill: #ffe3a8; }
+.lbl.outside { fill: rgb(197 186 255 / 0.82); }
+.lbl.selected { fill: var(--star); }
+
+.dimmed .star:not(.lit), .dimmed .edge:not(.lit), .dimmed .lbl:not(.lit) { opacity: 0.1; }
+.dimmed .edge.lit { opacity: 1; }
+.sky-svg .edge:not(.shown) { opacity: 0; }
+
+.sky-tools { position: absolute; top: 14px; right: 14px; display: flex; gap: 8px; }
+.sky-btn {
+  padding: 5px 13px;
+  font: 500 12.5px var(--f-label);
+  letter-spacing: 0.02em;
+  color: var(--star-2);
+  background: rgb(11 16 40 / 0.6);
+  border: 1px solid rgb(232 238 255 / 0.16);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.sky-btn:hover { color: var(--star); border-color: rgb(232 238 255 / 0.32); text-decoration: none; }
+
+.sky-legend {
+  position: absolute;
+  left: 18px;
+  bottom: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  font: 500 12px var(--f-label);
+  color: var(--star-3);
+  pointer-events: none;
+}
+.sky-legend span { display: inline-flex; align-items: center; gap: 7px; }
+.sky-legend svg { overflow: visible; }
+.lg-gold { stroke: var(--gold); fill: var(--gold); }
+.lg-teal { stroke: var(--teal); fill: var(--teal); }
+.lg-dots { stroke: var(--star); stroke-opacity: 0.5; stroke-dasharray: 0.1 4.2; stroke-linecap: round; }
+.lg-deep { fill: var(--deep); }
+.lg-star { fill: var(--star); fill-opacity: 0.8; }
+
+.sky-tip {
+  position: absolute;
+  z-index: 2;
+  max-width: 300px;
+  padding: 10px 12px 9px;
+  pointer-events: none;
+  background: rgb(8 12 32 / 0.92);
+  border: 1px solid rgb(232 238 255 / 0.14);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.35);
+}
+.sky-tip .t { margin: 0; font: 500 15px/1.3 var(--f-display); font-variation-settings: "opsz" 24; color: var(--star); }
+.sky-tip .m { margin: 5px 0 0; font: 400 11px var(--f-mono); color: var(--star-3); letter-spacing: 0.02em; }
+
+.sky-panel {
+  max-height: min(76vh, 720px);
+  min-height: 460px;
+  padding: 22px 22px 18px;
+  overflow-y: auto;
+  font: 400 14px/1.55 var(--f-label);
+  color: var(--star-2);
+  background: rgb(5 8 24 / 0.38);
+  border-left: 1px solid var(--hair);
+}
+.sky-panel a { color: var(--teal); }
+.p-kicker { margin: 0 0 10px; font: 500 11px var(--f-mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--star-3); }
+.p-kicker.path { color: var(--gold); }
+.p-kicker.outside { color: var(--deep); }
+.p-title { margin: 0 0 10px; font: 560 22px/1.22 var(--f-display); font-variation-settings: "opsz" 40; color: var(--star); }
+.p-authors { margin: 0 0 4px; font-size: 13.5px; color: var(--star-2); }
+.p-meta { margin: 0 0 14px; font: 400 12px var(--f-mono); color: var(--star-3); }
+.p-abstract { margin: 0 0 16px; font: 380 14.5px/1.62 var(--f-display); font-variation-settings: "opsz" 14; color: rgb(232 238 255 / 0.84); }
+.p-label { margin: 18px 0 8px; font: 500 11px var(--f-mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--star-3); }
+.p-why { list-style: none; margin: 0 0 16px; padding: 0; }
+.p-why li { display: flex; gap: 10px; align-items: baseline; margin: 0 0 6px; }
+.p-why svg { flex: none; overflow: visible; }
+.p-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 18px 0 6px; }
+.sky-panel .p-btn { padding: 7px 14px; font: 600 13px var(--f-label); color: var(--sky); background: var(--gold); border-radius: 999px; }
+.sky-panel .p-btn:hover { text-decoration: none; filter: brightness(1.08); }
+.sky-panel .p-btn.ghost { color: var(--star); background: transparent; border: 1px solid rgb(232 238 255 / 0.22); font-weight: 500; }
+.p-quiet { padding: 0; font: 500 13px var(--f-label); color: var(--star-3); background: none; border: 0; cursor: pointer; }
+.p-quiet:hover { color: var(--star); }
+.p-fine { margin: 10px 0 0; font-size: 12.5px; color: var(--star-3); }
+.p-intro { margin: 0 0 12px; }
+.p-key { list-style: none; margin: 14px 0; padding: 0; }
+.p-key li { display: flex; gap: 12px; align-items: center; margin: 0 0 9px; }
+.p-key svg { flex: none; width: 30px; overflow: visible; }
+
+@keyframes rise { from { opacity: 0; } to { opacity: 1; } }
+.star, .lbl { animation: rise 0.7s ease-out backwards; }
+.settled .lbl { animation-duration: 0.25s; animation-delay: 0s !important; }
+@media (prefers-reduced-motion: reduce) {
+  .star, .lbl { animation: none; }
+  .edge path, .star, .lbl, .star .reticle { transition: none; }
+}
+
+@media (max-width: 900px) {
+  .sky { grid-template-columns: 1fr; }
+  .sky-graph { height: min(64vh, 520px); min-height: 380px; }
+  .sky-panel { max-height: none; min-height: 0; border-left: 0; border-top: 1px solid var(--hair); }
+  .sky-legend { right: 18px; }
+}

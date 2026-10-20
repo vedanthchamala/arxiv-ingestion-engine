@@ -111,7 +111,7 @@ def test_explore_empty_state(client):
         r = client.get("/explore")
 
     assert r.status_code == 200 and "Nothing here yet" in r.text
-    assert "cytoscape" not in r.text
+    assert "d3-7.9.0" not in r.text and "explore.js" not in r.text
 
 
 def test_explore_page_renders_graph_lists_and_vendored_scripts(client):
@@ -121,14 +121,14 @@ def test_explore_page_renders_graph_lists_and_vendored_scripts(client):
     assert r.status_code == 200
     graph.assert_called_once_with(CONN, 2, 20)
     t = r.text
-    for lib in (
-        "cytoscape-3.34.3.min.js",
-        "layout-base-2.0.1.js",
-        "cose-base-2.2.0.js",
-        "cytoscape-fcose-2.2.0.js",
+    for asset in (
+        "vendor/d3-7.9.0.min.js",
         "explore.js",
+        "explore.css",
+        "fonts/ibm-plex-sans-condensed-latin-400-normal.woff2",
     ):
-        assert f"/static/vendor/{lib}" in t or f"/static/{lib}" in t
+        assert f"/static/{asset}" in t
+    assert 'data-dwell="10"' in t
     assert 'href="/explore/5"' in t and 'aria-current="true">SLAM' in t
     assert 'href="/paper/2609.17387?via=2608.26868&kind=similar&web=2"' in t
     assert 'href="/paper/2610.00001?via=2608.26868&kind=followed_by&web=2"' in t
@@ -155,15 +155,29 @@ def test_explore_limit_is_bounded(client):
 def test_static_explore_script_is_served(client):
     r = client.get("/static/explore.js")
 
-    assert r.status_code == 200 and "fixedNodeConstraint" in r.text and "#paper=" in r.text
+    assert r.status_code == 200 and "placeLabels" in r.text and "#paper=" in r.text
 
 
-def test_vendored_libraries_have_their_licenses(client):
-    r = client.get("/static/vendor/LICENSES.md")
+def test_vendored_libraries_and_fonts_have_their_licenses(client):
+    vendor = client.get("/static/vendor/LICENSES.md")
+    fonts = client.get("/static/fonts/LICENSES.md")
 
-    assert r.status_code == 200 and r.text.count("Permission is hereby granted") == 4
+    assert vendor.status_code == 200 and "d3 7.9.0 (ISC)" in vendor.text
+    assert "Permission to use" in vendor.text
+    assert fonts.status_code == 200 and fonts.text.count("SIL Open Font License") >= 3
 
 
 def test_nav_links_to_explore(client):
     with patch.object(recommend, "graph", return_value=GRAPH):
         assert '<a href="/explore">Explore</a>' in client.get("/explore/2").text
+
+
+def test_star_chart_assets_are_served(client):
+    for path in (
+        "vendor/d3-7.9.0.min.js",
+        "explore.css",
+        "fonts/fraunces-latin-opsz-normal.woff2",
+        "fonts/ibm-plex-sans-condensed-latin-600-normal.woff2",
+        "fonts/ibm-plex-mono-latin-500-normal.woff2",
+    ):
+        assert client.get(f"/static/{path}").status_code == 200, path
