@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Your trail · arXiv search{% endblock %}
+{% set kind_label = {"builds_on": "builds on", "followed_by": "followed by", "similar": "similar to",
+                     "search": "from search", "manual": "added"} %}
+{% block content %}
+<h1 class="page-title">Your trail</h1>
+<p class="fine">
+  Papers you read for more than {{ dwell }} seconds, in reading order, grouped into one web per research area.
+  A paper opened from a suggestion joins that suggestion's web; one far from all of them starts a new web.
+</p>
+
+{% for w in webs %}
+<section class="web-card" id="web-{{ w.id }}">
+  <div class="watch-head">
+    <h2>{{ w.name }}</h2>
+    <span class="counts">{{ w.papers }} paper{{ "" if w.papers == 1 else "s" }} · last read {{ w.last_read | date }}</span>
+  </div>
+  <ol class="path">
+    {% for p in paths[w.id] %}
+    <li class="path-step">
+      <span class="path-dot" aria-hidden="true"></span>
+      <div class="path-body">
+        <a class="path-title" href="/paper/{{ p.arxiv_id }}">{{ p.title }}</a>
+        <span class="r-meta">
+          {{ p.primary_category }} · read {{ p.added_at | date }}
+          {% if p.via_kind %}· {{ kind_label.get(p.via_kind, p.via_kind) }}{% if p.via_arxiv_id %} {{ p.via_arxiv_id }}{% endif %}{% endif %}
+          {% if p.query %}· “{{ p.query }}”{% endif %}
+        </span>
+        <div class="path-actions">
+          {% if webs | length > 1 %}
+          <form method="post" action="/trail/{{ p.arxiv_id }}/move" class="inline">
+            <label class="sr" for="move-{{ p.arxiv_id }}">Move to web</label>
+            <select id="move-{{ p.arxiv_id }}" name="web_id" onchange="this.form.requestSubmit()">
+              <option value="" disabled selected>Move to…</option>
+              {% for o in webs if o.id != w.id %}<option value="{{ o.id }}">{{ o.name }}</option>{% endfor %}
+            </select>
+          </form>
+          {% endif %}
+          <form method="post" action="/trail/{{ p.arxiv_id }}/remove" class="inline">
+            <input type="hidden" name="next" value="/trail#web-{{ w.id }}">
+            <button type="submit" class="link-btn">Remove</button>
+          </form>
+        </div>
+      </div>
+    </li>
+    {% endfor %}
+  </ol>
+  <details class="web-edit">
+    <summary>Rename or delete this web</summary>
+    <form method="post" action="/webs/{{ w.id }}/rename" class="rename">
+      <input type="text" name="name" value="{{ w.name }}" maxlength="80" required aria-label="Web name">
+      <button type="submit" class="btn">Rename</button>
+    </form>
+    <form method="post" action="/webs/{{ w.id }}/delete">
+      <button type="submit" class="link-btn danger">Delete this web and its path</button>
+    </form>
+  </details>
+</section>
+{% else %}
+<p class="empty">Nothing on your trail yet. Open a paper and read it for {{ dwell }} seconds, or press “Add now” on its page.</p>
+{% endfor %}
+{% endblock %}

@@ -13,6 +13,7 @@
     {{ paper.arxiv_id }}v{{ paper.version }} · published {{ paper.published_at | date }}
     {% if paper.updated_at and paper.updated_at.date() != paper.published_at.date() %}· updated {{ paper.updated_at | date }}{% endif %}
   </p>
+  {% include "_trail_status.html" %}
   <div class="actions">
     <a class="btn solid" href="/paper/{{ paper.arxiv_id }}/design">High-level design</a>
     <a class="btn" href="https://arxiv.org/abs/{{ paper.arxiv_id }}v{{ paper.version }}">arXiv page</a>

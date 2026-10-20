@@ -99,6 +99,7 @@ def dbm():
         patch.object(db, "get_figures", return_value={"figures": FIGURES, "status": "done"}),
         patch.object(db, "list_designs", return_value=[{"provider": "local", "status": "done"}]),
         patch.object(db, "reset_design") as reset,
+        patch.object(db, "trail_entry", return_value=None),
         patch.object(db, "sections", return_value=[]),
         patch.object(db, "paper_vector", return_value=None),
         patch.object(design, "start", return_value=False) as start,

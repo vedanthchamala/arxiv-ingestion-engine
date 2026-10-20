@@ -14,6 +14,7 @@ from arxiv_common import db
 from arxiv_common.inference import InferenceError
 from arxiv_common.text import parse_arxiv_id
 
+from . import trail
 from .service import SearchRequest, run_search, settings, similar, state
 
 router = APIRouter(include_in_schema=False)
@@ -140,19 +141,44 @@ def index(
 
 
 @router.get("/paper/{arxiv_id:path}", response_class=HTMLResponse)
-def paper_page(request: Request, arxiv_id: str):
+def paper_page(
+    request: Request,
+    arxiv_id: str,
+    via: str | None = Query(default=None, max_length=64),
+    kind: str | None = Query(default=None, max_length=32),
+    web: int | None = None,
+    q: str | None = Query(default=None, max_length=500),
+):
     canonical = parse_arxiv_id(arxiv_id)
     if canonical and canonical != arxiv_id:
-        return RedirectResponse(f"/paper/{canonical}", status_code=301)
+        query = f"?{request.url.query}" if request.url.query else ""
+        return RedirectResponse(f"/paper/{canonical}{query}", status_code=301)
     with state.pool.connection() as conn:
         paper = db.get_paper(conn, arxiv_id)
         sections = db.sections(conn, arxiv_id) if paper else []
+        on_trail = db.trail_entry(conn, arxiv_id) if paper else None
     if paper is None:
         return render(
             request, "missing.html", status_code=404, arxiv_id=arxiv_id, valid=canonical is not None
         )
     related = similar(arxiv_id, 8) or []
-    return render(request, "paper.html", paper=paper, sections=sections, related=related)
+    beacon = {
+        "arxiv_id": arxiv_id,
+        "via": parse_arxiv_id(via) if via else None,
+        "kind": kind if kind in trail.KINDS else None,
+        "q": q.strip() if q and q.strip() else None,
+        "web": web,
+    }
+    return render(
+        request,
+        "paper.html",
+        paper=paper,
+        sections=sections,
+        related=related,
+        on_trail=on_trail,
+        beacon=beacon,
+        dwell=trail.DWELL_SECONDS,
+    )
 
 
 @router.get("/author", response_class=HTMLResponse)

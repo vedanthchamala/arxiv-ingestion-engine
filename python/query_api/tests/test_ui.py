@@ -77,6 +77,7 @@ def dbm() -> Iterator[SimpleNamespace]:
         patch.object(db, "sections", return_value=["1 Introduction", "3 Method"]) as sections,
         patch.object(db, "paper_vector", return_value=VEC) as paper_vector,
         patch.object(db, "find_author", return_value=None) as find_author,
+        patch.object(db, "trail_entry", return_value=None),
         patch.object(
             db, "author_papers", return_value=[row(3, authors=["Ada Lovelace", "Alan Turing"])]
         ) as author_papers,

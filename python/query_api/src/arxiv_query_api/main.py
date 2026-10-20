@@ -15,7 +15,7 @@ from arxiv_common import db, metrics
 from arxiv_common.inference import InferenceClient
 from arxiv_common.logging import configure
 
-from . import design_pages, ui, watches
+from . import design_pages, trail_pages, ui, watches
 from .cache import SearchCache
 from .service import SearchHit, SearchRequest, SearchResponse, run_search, settings, similar, state
 
@@ -66,6 +66,7 @@ app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), na
 app.include_router(design_pages.router)  # before ui: /paper/{id:path} would swallow /paper/{id}/design
 app.include_router(ui.router)
 app.include_router(watches.router)
+app.include_router(trail_pages.router)
 
 
 @app.post("/search", response_model=SearchResponse)

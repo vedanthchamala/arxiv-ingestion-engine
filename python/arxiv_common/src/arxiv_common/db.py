@@ -527,3 +527,124 @@ def store_figures(
         """,
         (arxiv_id, version, status, Jsonb(figures), error, parser),
     )
+
+
+# -- reading trail -------------------------------------------------------------------------------
+
+
+def neighbors(conn: psycopg.Connection, arxiv_id: str, k: int) -> list[dict]:
+    """The k papers whose title + abstract (chunk 0) are nearest this paper's, with cosine similarity."""
+    with conn.transaction():
+        conn.execute("SET LOCAL hnsw.ef_search = 100")
+        return conn.execute(
+            """
+            SELECT c.arxiv_id, 1 - (c.embedding <=> q.embedding) AS sim
+            FROM chunks q, chunks c
+            WHERE q.arxiv_id = %(id)s AND q.idx = 0 AND c.idx = 0 AND c.arxiv_id <> %(id)s
+            ORDER BY c.embedding <=> q.embedding
+            LIMIT %(k)s
+            """,
+            {"id": arxiv_id, "k": k},
+        ).fetchall()
+
+
+def trail_entry(conn: psycopg.Connection, arxiv_id: str) -> dict | None:
+    return conn.execute(
+        "SELECT t.*, w.name AS web_name FROM trail t JOIN webs w ON w.id = t.web_id WHERE t.arxiv_id = %s",
+        (arxiv_id,),
+    ).fetchone()
+
+
+def recent_trail(conn: psycopg.Connection, web_id: int, n: int) -> list[str]:
+    rows = conn.execute(
+        "SELECT arxiv_id FROM trail WHERE web_id = %s ORDER BY added_at DESC LIMIT %s", (web_id, n)
+    ).fetchall()
+    return [r["arxiv_id"] for r in rows]
+
+
+def web_ids_by_activity(conn: psycopg.Connection) -> list[int]:
+    rows = conn.execute("SELECT web_id FROM trail GROUP BY web_id ORDER BY max(added_at) DESC").fetchall()
+    return [r["web_id"] for r in rows]
+
+
+def create_web(conn: psycopg.Connection, name: str) -> int:
+    return conn.execute("INSERT INTO webs (name) VALUES (%s) RETURNING id", (name,)).fetchone()["id"]
+
+
+def add_to_trail(
+    conn: psycopg.Connection,
+    arxiv_id: str,
+    web_id: int,
+    via_arxiv_id: str | None,
+    via_kind: str | None,
+    query: str | None,
+) -> bool:
+    """True if the paper joined the trail now; False if it was already on it (a paper has one web)."""
+    with conn.transaction():
+        row = conn.execute(
+            "INSERT INTO trail (arxiv_id, web_id, via_arxiv_id, via_kind, query) VALUES (%s, %s, %s, %s, %s) "
+            "ON CONFLICT (arxiv_id) DO NOTHING RETURNING arxiv_id",
+            (arxiv_id, web_id, via_arxiv_id, via_kind, query),
+        ).fetchone()
+        if row:
+            conn.execute("UPDATE webs SET updated_at = now() WHERE id = %s", (web_id,))
+    return row is not None
+
+
+def list_webs(conn: psycopg.Connection) -> list[dict]:
+    return conn.execute(
+        """
+        SELECT w.id, w.name, count(t.arxiv_id) AS papers, max(t.added_at) AS last_read
+        FROM webs w JOIN trail t ON t.web_id = w.id
+        GROUP BY w.id ORDER BY max(t.added_at) DESC
+        """
+    ).fetchall()
+
+
+def get_web(conn: psycopg.Connection, web_id: int) -> dict | None:
+    return conn.execute("SELECT * FROM webs WHERE id = %s", (web_id,)).fetchone()
+
+
+def web_trail(conn: psycopg.Connection, web_id: int) -> list[dict]:
+    """The web's path in reading order, with what the UI shows for each paper."""
+    return conn.execute(
+        f"""
+        SELECT t.arxiv_id, t.added_at, t.via_arxiv_id, t.via_kind, t.query, p.title, p.version,
+               p.primary_category, p.published_at, p.summary, p.abstract, {_AUTHORS}
+        FROM trail t JOIN papers p ON p.arxiv_id = t.arxiv_id
+        WHERE t.web_id = %s ORDER BY t.added_at
+        """,
+        (web_id,),
+    ).fetchall()
+
+
+def rename_web(conn: psycopg.Connection, web_id: int, name: str) -> None:
+    conn.execute("UPDATE webs SET name = %s, updated_at = now() WHERE id = %s", (name, web_id))
+
+
+def delete_web(conn: psycopg.Connection, web_id: int) -> None:
+    conn.execute("DELETE FROM webs WHERE id = %s", (web_id,))
+
+
+def move_to_web(conn: psycopg.Connection, arxiv_id: str, web_id: int) -> None:
+    conn.execute("UPDATE trail SET web_id = %s WHERE arxiv_id = %s", (web_id, arxiv_id))
+
+
+def remove_from_trail(conn: psycopg.Connection, arxiv_id: str) -> None:
+    """Drop the paper from its web, and the web itself once it has no papers left."""
+    with conn.transaction():
+        row = conn.execute("DELETE FROM trail WHERE arxiv_id = %s RETURNING web_id", (arxiv_id,)).fetchone()
+        if row:
+            conn.execute(
+                "DELETE FROM webs w WHERE w.id = %s "
+                "AND NOT EXISTS (SELECT 1 FROM trail t WHERE t.web_id = w.id)",
+                (row["web_id"],),
+            )
+
+
+def dismiss(conn: psycopg.Connection, key: str) -> None:
+    conn.execute("INSERT INTO dismissed (key) VALUES (%s) ON CONFLICT DO NOTHING", (key,))
+
+
+def dismissed_keys(conn: psycopg.Connection) -> set[str]:
+    return {r["key"] for r in conn.execute("SELECT key FROM dismissed").fetchall()}

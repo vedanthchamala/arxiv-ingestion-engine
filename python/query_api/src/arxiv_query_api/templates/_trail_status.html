@@ -1,0 +1,57 @@
+{# Reading-trail status for one paper, and the dwell beacon that adds it after enough visible time.
+   Context: paper, on_trail (trail row or None), beacon (dict sent to /trail/read), dwell (seconds). #}
+<div class="trail-status" id="trail-status" data-state="{{ 'on' if on_trail else 'off' }}">
+  {% if on_trail %}
+  <span class="trail-dot" aria-hidden="true"></span>
+  <span>On your path in <a href="/trail#web-{{ on_trail.web_id }}">{{ on_trail.web_name }}</a></span>
+  <form method="post" action="/trail/{{ paper.arxiv_id }}/remove" class="inline">
+    <input type="hidden" name="next" value="/paper/{{ paper.arxiv_id }}">
+    <button type="submit" class="link-btn">Remove</button>
+  </form>
+  {% else %}
+  <span class="trail-dot off" aria-hidden="true"></span>
+  <span>Reading this for {{ dwell }} seconds adds it to your path.</span>
+  <form method="post" action="/trail/add" class="inline">
+    <input type="hidden" name="arxiv_id" value="{{ paper.arxiv_id }}">
+    <button type="submit" class="link-btn">Add now</button>
+  </form>
+  {% endif %}
+</div>
+{% if not on_trail %}
+<script>
+(() => {
+  // Count only time the tab is visible, so a page left open in the background never joins the path.
+  const need = {{ dwell * 1000 }}, payload = {{ beacon | tojson }};
+  let seen = 0, since = document.visibilityState === "visible" ? Date.now() : null, done = false;
+  const flush = () => { if (since !== null) { const now = Date.now(); seen += now - since; since = now; } };
+  document.addEventListener("visibilitychange", () => {
+    flush();
+    since = document.visibilityState === "visible" ? Date.now() : null;
+  });
+  const timer = setInterval(() => {
+    flush();
+    if (done || seen < need) return;
+    done = true;
+    clearInterval(timer);
+    fetch("/trail/read", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payload, seconds: Math.round(seen / 1000) }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((res) => {
+        if (!res) return;
+        const box = document.getElementById("trail-status");
+        const dot = document.createElement("span");
+        dot.className = "trail-dot";
+        const link = document.createElement("a");
+        link.href = "/trail#web-" + res.web_id;
+        link.textContent = res.web_name;
+        box.dataset.state = "on";
+        box.replaceChildren(dot, res.new_web ? "Started a new web: " : "Added to your path in ", link);
+      })
+      .catch(() => {});
+  }, 1000);
+})();
+</script>
+{% endif %}
