@@ -21,8 +21,9 @@ morning.
   architecture figure, results and key terms. Numbers and terms are checked against the paper's text.
 - **Watches.** Save any search and see the papers that arrived since your last visit, or subscribe to
   its Atom feed in any feed reader.
-- **Everything local.** Embeddings and summaries come from Ollama on your machine (or vLLM on a GPU
-  box), and no paper text leaves it.
+- **Local by default.** Embeddings, summaries and design pages come from Ollama on your machine (or
+  vLLM on a GPU box). Paper text only leaves it if you add an Anthropic key so Claude can write the
+  design pages too.
 
 <details>
 <summary>The High-level design page of a paper</summary>
