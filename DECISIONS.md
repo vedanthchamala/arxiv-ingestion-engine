@@ -469,11 +469,21 @@ hand-written IEEE ones, titles matched to the index); a result fetched while Sem
 stored as `partial` and retried a day later. (d) *Suggestions.* From the web's eight latest path papers,
 newest weighted highest: what they cite (a reference shared by several path papers outweighs one entry in
 one bibliography), what cites them, and their nearest papers. Papers on any path and dismissed ones are
-excluded, each source paper contributes at most four, papers outside the index at most a third, and every
-suggestion keeps its reasons. (e) *Picture.* Cytoscape.js with fCoSE: the path is a bold spine pinned in
-reading order, each suggestion hangs off the path paper behind its strongest reason (all reasons are in the
-side panel), "builds on" is an arrow, "similar" dashed, outside papers dashed outlines. The libraries are
-vendored (MIT, npm integrity checked) so the page works offline. **Consequences** Nothing here needs the
+excluded, each source paper contributes at most four (more when the path has fewer papers than the list
+has room for, so a one-paper web still gets a full set), papers outside the index at most a third, and
+every suggestion keeps its reasons. (e) *Picture.* A star chart drawn with D3 in SVG (2026-10-20; it
+replaced a first version on Cytoscape.js + fCoSE whose labels sat in boxes, collided with edges and drew two
+edges between the same pair). The path is a gold constellation pinned in reading order; each path paper keeps
+one side free for its own label and its suggestions sit on the other, in its own column, so clusters never
+drift into a tangle between papers. Force only resolves collisions. One edge per pair (trail over "builds
+on" over "similar"), curved, ending at the star's rim; a suggestion shows only its link to the paper it
+branches from until it is hovered or selected. Star size is how strongly a suggestion is linked to the path
+(not citation counts, which only Semantic Scholar has and its keyless pool rarely answers). Zoom is
+semantic: positions scale, text and strokes do not, and labels are placed after every move in screen space
+from sixteen candidate spots, rejecting any that would cross an edge, a star, another label or the legend;
+a suggestion label with no free spot is left out until hovered, a path label falls back to a narrower wrap.
+Fonts are Fraunces, IBM Plex Sans Condensed and IBM Plex Mono. D3 (ISC) and the fonts (OFL) are vendored,
+npm integrity checked, so the page works offline. **Consequences** Nothing here needs the
 GPU: assignment and suggestions use stored vectors, so the feature runs while the model server is busy.
 The corpus is a recent slice, so most "builds on" targets are older papers outside the index, shown as
 outside nodes linking to arXiv; brand-new papers have few citing papers yet. Semantic Scholar's keyless pool

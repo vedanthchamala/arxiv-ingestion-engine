@@ -22,9 +22,10 @@ morning.
 - **Watches.** Save any search and see the papers that arrived since your last visit, or subscribe to
   its Atom feed in any feed reader.
 - **Explore: a map that grows as you read.** Papers you read for 10 seconds join your path, grouped into
-  one web per research area. Each web is drawn as a graph: your path in reading order, and suggestions
-  branching off it — papers yours build on, newer work that builds on them, and the most similar papers.
-  Read a suggestion and it joins your path, and new suggestions branch from it.
+  one web per research area. Each web is drawn as a star chart: your path is a gold constellation in
+  reading order, and suggestions branch off it — papers yours build on, newer work that builds on them,
+  and the most similar papers. Hover a star to trace its links, click it for the abstract and why it is
+  there. Read a suggestion and it joins your path, and new suggestions branch from it.
 - **Local by default.** Embeddings, summaries and design pages come from Ollama on your machine (or
   vLLM on a GPU box). Paper text only leaves it if you add an Anthropic key so Claude can write the
   design pages too.
