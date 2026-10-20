@@ -16,7 +16,8 @@ from arxiv_common.ratelimit import DEFAULT_KEY, SharedMinInterval
 log = structlog.get_logger()
 
 MAX_FIGURES = 16
-_FIGURE_NO = re.compile(r"^\s*Figure\s+(\d+)\s*[:.]?\s*", re.IGNORECASE)
+PARSER_VERSION = 2  # bump when parsing changes: cached figure lists from older versions are fetched again
+_FIGURE_NO = re.compile(r"^\s*(?:Figure|Fig\.?)\s*(\d+)\s*[:.]?\s*", re.IGNORECASE)
 _OVERVIEW = re.compile(
     r"\b(overview|architecture|pipeline|framework|system design|method overview|our (method|approach|system)|"
     r"illustration of (our|the proposed))\b",

@@ -100,7 +100,7 @@
   <section class="d-section">
     <h2 class="d-h">Results at a glance</h2>
     <div class="stats">
-      {% for r in d.results %}<div class="stat"><span class="stat-v">{{ r.value }}</span><span class="stat-l">{{ r.label }}</span></div>{% endfor %}
+      {% for r in d.results %}<div class="stat"><span class="stat-v{% if r.value | length > 14 %} long{% endif %}">{{ r.value }}</span><span class="stat-l">{{ r.label }}</span></div>{% endfor %}
     </div>
   </section>
   {% endif %}

@@ -510,13 +510,20 @@ def get_figures(conn: psycopg.Connection, arxiv_id: str) -> dict | None:
 
 
 def store_figures(
-    conn: psycopg.Connection, arxiv_id: str, version: int, status: str, figures: list[dict], error: str | None
+    conn: psycopg.Connection,
+    arxiv_id: str,
+    version: int,
+    status: str,
+    figures: list[dict],
+    error: str | None,
+    parser: int,
 ) -> None:
     conn.execute(
         """
-        INSERT INTO paper_figures (arxiv_id, version, status, figures, error) VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO paper_figures (arxiv_id, version, status, figures, error, parser)
+        VALUES (%s, %s, %s, %s, %s, %s)
         ON CONFLICT (arxiv_id) DO UPDATE SET version = EXCLUDED.version, status = EXCLUDED.status,
-            figures = EXCLUDED.figures, error = EXCLUDED.error, fetched_at = now()
+            figures = EXCLUDED.figures, error = EXCLUDED.error, parser = EXCLUDED.parser, fetched_at = now()
         """,
-        (arxiv_id, version, status, Jsonb(figures), error),
+        (arxiv_id, version, status, Jsonb(figures), error, parser),
     )

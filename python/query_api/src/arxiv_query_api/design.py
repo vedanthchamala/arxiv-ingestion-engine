@@ -27,7 +27,7 @@ from . import figures as figs
 
 log = structlog.get_logger()
 
-PROMPT_VERSION = 1
+PROMPT_VERSION = 2
 STALE_AFTER_S = 900
 MAX_STEPS = 6
 SOURCE_CHARS = {"local": 24_000, "claude": 60_000}
@@ -94,7 +94,8 @@ reading it. Use only facts stated in the paper text you are given.
 - steps: 3 to 6 steps in the order data flows through the method. name: 2 to 5 words. input, does, \
 output, why: one short plain phrase or sentence each; the output of a step is usually the input of the \
 next. section: the title of the section that describes the step, copied exactly.
-- results: up to 3 headline numbers copied exactly from the text, each with what it measures.
+- results: up to 3 headline numbers copied exactly from the text. value: only the number and its unit \
+(for example "130 KB/s" or "+12.4%"); label: what it measures.
 - terms: up to 4 terms a newcomer needs, with the meaning the text gives. Never expand an acronym \
 unless the text spells the expansion out.
 - overview_figure: the number of the figure that shows the overall design, or 0 if none does."""
@@ -116,8 +117,8 @@ should connect, the output of one feeding the next. does: one sentence. why: one
 would go wrong without the step. detail: two or three sentences on how it works, for a reader who \
 wants more. evidence: a short verbatim quote, under 30 words, from the text that supports the step. \
 section: the title of the section the step comes from, copied exactly.
-- results: up to 4 headline numbers copied exactly, each labelled with what it measures and, if the \
-text says, the baseline it is compared with.
+- results: up to 4 headline numbers copied exactly. value: only the number and its unit (for example \
+"130 KB/s" or "+12.4%"); label: what it measures and, if the text says, the baseline it is compared with.
 - terms: up to 5 terms a newcomer needs, defined the way the paper uses them.
 - limitations: up to 3 limitations the paper itself states; empty if it states none.
 - overview_figure: the number of the figure that best shows the overall architecture, or 0."""
@@ -296,18 +297,27 @@ def _numbers(s: str) -> set[str]:
     return {n.replace(",", ".").rstrip("0").rstrip(".") or "0" for n in _NUM.findall(s.translate(_DASHES))}
 
 
-def _is_acronym_expansion(term: str, meaning: str) -> bool:
-    letters = [c for c in term if c.isalpha()]
-    if len(letters) < 2 or sum(c.isupper() for c in letters) < 2:
-        return False
-    words = [
-        w
-        for w in re.findall(r"[A-Za-z]+", meaning)
-        if w.lower() not in {"of", "and", "for", "the", "a", "an", "in", "on", "to", "with"}
-    ]
-    initials = "".join(w[0] for w in words).upper()
-    acronym = "".join(c for c in letters if c.isupper())
-    return len(acronym) >= 2 and initials.startswith(acronym[:3])
+def _expansion(term: str, meaning: str) -> str | None:
+    """If `meaning` opens by spelling out the acronym `term` (VGGT -> "Visual Geometry Grounded
+    Transformer ..."), the spelled-out words; else None. Only these words must appear in the text, so a
+    longer description after them is fine."""
+    acronym = [c for c in term if c.isupper()]
+    if len(acronym) < 2:
+        return None
+    words = [w for w in re.findall(r"[A-Za-z0-9][\w-]*", meaning) if w.lower() not in _GLUE]
+    initials = "".join(next((c for c in w if c.isalpha()), w[0]) for w in words[: len(acronym)]).upper()
+    if len(words) < 2 or initials[:3] != "".join(acronym)[:3]:
+        return None
+    return " ".join(words[: len(acronym)])
+
+
+_GLUE = {"of", "and", "for", "the", "a", "an", "in", "on", "to", "with"}
+
+
+def _words_in(phrase: str, text: str) -> bool:
+    """The phrase's words in order in the normalized text, ignoring the glue words an expansion skips."""
+    words = [w for w in norm(phrase).split() if w not in _GLUE]
+    return re.search(r"\b" + r"\W+(?:\w+\W+){0,2}?".join(map(re.escape, words)), text) is not None
 
 
 def _match_section(name: str, sections: list[str]) -> str:
@@ -364,7 +374,7 @@ def validate(raw: dict, source: Source, fallback_one_liner: str) -> Checked:
     for t in d.terms:
         if norm(t.term) not in text:
             rejected.append({"kind": "term", "claim": t.term, "reason": "term not in the text"})
-        elif _is_acronym_expansion(t.term, t.meaning) and norm(t.meaning) not in text:
+        elif (expansion := _expansion(t.term, t.meaning)) and not _words_in(expansion, text):
             rejected.append(
                 {
                     "kind": "term",
@@ -423,14 +433,15 @@ def start(
 def ensure_figures(pool: ConnectionPool, settings: Settings, paper: dict) -> list[dict]:
     with pool.connection() as conn:
         row = db.get_figures(conn, paper["arxiv_id"])
-    if row and row["version"] == paper["version"] and row["status"] in ("done", "none"):
+    fresh = row and row["version"] == paper["version"] and row.get("parser", 1) >= figs.PARSER_VERSION
+    if fresh and row["status"] in ("done", "none"):
         return row["figures"]
     if not paper.get("html_url"):
         status, found, error = "none", [], None
     else:
         status, found, error = figs.fetch_figures(paper["html_url"], settings)
     with pool.connection() as conn:
-        db.store_figures(conn, paper["arxiv_id"], paper["version"], status, found, error)
+        db.store_figures(conn, paper["arxiv_id"], paper["version"], status, found, error, figs.PARSER_VERSION)
     return found
 
 

@@ -148,10 +148,26 @@ def test_validate_rejects_unusable_answers(bad):
 
 
 def test_acronym_expansion_detection():
-    assert design._is_acronym_expansion("VGGT", "Visual Geometry Grounded Transformer")
-    assert design._is_acronym_expansion("3DGS", "3D Gaussian Splatting")
-    assert not design._is_acronym_expansion("submap", "an agent's local map")
-    assert not design._is_acronym_expansion("VLA", "a model that maps images and text to actions")
+    assert design._expansion("VGGT", "Visual Geometry Grounded Transformer, a 3D model") == (
+        "Visual Geometry Grounded Transformer"
+    )
+    assert design._expansion("3DGS", "3D Gaussian Splatting") == "3D Gaussian Splatting"
+    assert design._expansion("TB", "Trajectory balance objective for GFlowNets") == "Trajectory balance"
+    assert design._expansion("submap", "an agent's local map") is None
+    assert design._expansion("VLA", "a model that maps images and text to actions") is None
+
+
+def test_expansion_only_needs_the_spelled_out_words_in_the_text():
+    chunks = [*CHUNKS, {"idx": 5, "section": "3 Method", "text": "We train with trajectory balance (TB)."}]
+    src = build_source("T", chunks, [], budget=10_000)
+    terms = [
+        {"term": "TB", "meaning": "Trajectory balance objective used for training GFlowNets"},
+        {"term": "MMDE", "meaning": "Metric monocular depth estimator, here Depth Pro"},
+    ]
+
+    checked = validate(raw(terms=terms), src, "f.")
+
+    assert [t.term for t in checked.design.terms] == ["TB", "MMDE"]
 
 
 # -- providers -----------------------------------------------------------------------------------
@@ -285,7 +301,9 @@ def pool():
 
 def test_run_stores_a_checked_design(pool):
     with (
-        patch.object(db, "get_figures", return_value={"version": 1, "status": "done", "figures": FIGS}),
+        patch.object(
+            db, "get_figures", return_value={"version": 1, "status": "done", "figures": FIGS, "parser": 2}
+        ),
         patch.object(db, "design_source", return_value=CHUNKS),
         patch.object(db, "finish_design") as finish,
         patch.dict(design.GENERATORS, {"local": lambda src, s: (raw(), design.Usage("m", 10, 5))}),
@@ -303,7 +321,9 @@ def test_run_records_failures(pool):
         raise DesignError("model server down")
 
     with (
-        patch.object(db, "get_figures", return_value={"version": 1, "status": "none", "figures": []}),
+        patch.object(
+            db, "get_figures", return_value={"version": 1, "status": "none", "figures": [], "parser": 2}
+        ),
         patch.object(db, "design_source", return_value=CHUNKS),
         patch.object(db, "finish_design") as finish,
         patch.dict(design.GENERATORS, {"local": boom}),
@@ -324,12 +344,26 @@ def test_figures_are_fetched_once_per_paper_version(pool):
 
     fetch.assert_called_once_with("https://arxiv.org/html/2608.26868v1", SETTINGS)
     store.assert_called_once()
+    cached = {"version": 1, "status": "done", "figures": FIGS, "parser": figures.PARSER_VERSION}
     with (
-        patch.object(db, "get_figures", return_value={"version": 1, "status": "done", "figures": FIGS}),
+        patch.object(db, "get_figures", return_value=cached),
         patch.object(figures, "fetch_figures") as fetch,
     ):
         design.ensure_figures(pool, SETTINGS, PAPER)
     fetch.assert_not_called()
+
+
+def test_figures_parsed_by_an_older_parser_are_fetched_again(pool):
+    old = {"version": 1, "status": "done", "figures": [], "parser": figures.PARSER_VERSION - 1}
+    with (
+        patch.object(db, "get_figures", return_value=old),
+        patch.object(db, "store_figures") as store,
+        patch.object(figures, "fetch_figures", return_value=("done", FIGS, None)) as fetch,
+    ):
+        assert design.ensure_figures(pool, SETTINGS, PAPER) == FIGS
+
+    fetch.assert_called_once()
+    assert store.call_args.args[-1] == figures.PARSER_VERSION
 
 
 def test_start_queues_only_when_claimed_and_never_loops_on_failure(pool):
@@ -379,6 +413,8 @@ LATEXML = """
   <figure class="ltx_figure ltx_figure_panel"><img src="2608.26868v1/b.png"></figure>
   <figcaption><span class="ltx_tag ltx_tag_figure">Figure 2: </span>Two panels &amp; results.
   </figcaption></figure>
+<figure id="S5.F4" class="ltx_figure"><img src="2608.26868v1/ieee.png">
+  <figcaption><span class="ltx_tag ltx_tag_figure">Fig. 4: </span>IEEE style caption.</figcaption></figure>
 <figure id="A1.F3" class="ltx_figure"><img src="2608.26868v1/s.png">
   <figcaption><span class="ltx_tag ltx_tag_figure">Figure S1: </span>Supplementary.</figcaption></figure>
 """
@@ -387,7 +423,8 @@ LATEXML = """
 def test_parse_figures_from_latexml():
     found = figures.parse_figures(LATEXML, "https://arxiv.org/html/2608.26868v1")
 
-    assert [f["n"] for f in found] == [1, 2]
+    assert [f["n"] for f in found] == [1, 2, 4]
+    assert found[2]["caption"] == "IEEE style caption."
     assert found[0]["images"] == ["https://arxiv.org/html/2608.26868v1/arch.png"]
     assert found[0]["caption"] == "The global architecture of our framework."
     assert found[1]["images"] == [
