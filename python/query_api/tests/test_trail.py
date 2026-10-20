@@ -310,7 +310,7 @@ def test_paper_on_the_trail_shows_its_web_and_no_beacon(client, dbm):
 
     t = client.get("/paper/2608.26868").text
 
-    assert 'On your path in <a href="/trail#web-2">SLAM</a>' in t
+    assert 'On your path in <a href="/explore/2#paper=2608.26868">SLAM</a>' in t
     assert 'action="/trail/2608.26868/remove"' in t
     assert "/trail/read" not in t
 

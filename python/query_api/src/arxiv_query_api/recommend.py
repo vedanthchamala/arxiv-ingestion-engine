@@ -148,4 +148,11 @@ def graph(conn: psycopg.Connection, web_id: int, limit: int = LIMIT) -> dict | N
     for e in db.citations_for(conn, path_ids):
         if e["direction"] == "cites" and e["other_arxiv_id"] in on_path:
             edges.append({"source": e["arxiv_id"], "target": e["other_arxiv_id"], "type": "builds_on"})
-    return {"web": {"id": web["id"], "name": web["name"]}, "nodes": nodes, "edges": edges}
+    unique_edges = list({(e["source"], e["target"], e["type"]): e for e in edges}.values())
+    pending = len(set(path_ids) - db.citation_fetched(conn, path_ids))
+    return {
+        "web": {"id": web["id"], "name": web["name"]},
+        "nodes": nodes,
+        "edges": unique_edges,
+        "pending_citations": pending,
+    }

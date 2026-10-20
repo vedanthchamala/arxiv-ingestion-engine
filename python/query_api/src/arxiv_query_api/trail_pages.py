@@ -1,7 +1,7 @@
 """Reading-trail endpoints: the dwell beacon from paper pages, the manual "Add to path" button, and the
 page that lists each web's path with rename / move / remove."""
 
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
@@ -104,9 +104,9 @@ def trail_page(request: Request):
 
 
 @router.get("/webs/{web_id}/graph.json")
-def web_graph(web_id: int):
+def web_graph(web_id: int, limit: int = Query(default=recommend.LIMIT, ge=4, le=40)):
     with state.pool.connection() as conn:
-        g = recommend.graph(conn, web_id)
+        g = recommend.graph(conn, web_id, limit)
     if g is None:
         return JSONResponse({"detail": "no such web"}, status_code=404)
     citations.schedule(state.pool, settings, [n["id"] for n in g["nodes"] if n["kind"] == "path"])
@@ -125,3 +125,33 @@ def dismiss(request: Request, body: Dismiss) -> dict:
     with state.pool.connection() as conn:
         db.dismiss(conn, key)
     return {"dismissed": key}
+
+
+@router.get("/explore", response_class=HTMLResponse)
+def explore_latest(request: Request):
+    with state.pool.connection() as conn:
+        webs = db.list_webs(conn)
+    if webs:
+        return RedirectResponse(f"/explore/{webs[0]['id']}", status_code=303)
+    return render(request, "explore.html", webs=[], web=None, graph=None, dwell=trail.DWELL_SECONDS)
+
+
+@router.get("/explore/{web_id}", response_class=HTMLResponse)
+def explore(request: Request, web_id: int, limit: int = Query(default=recommend.LIMIT, ge=4, le=40)):
+    with state.pool.connection() as conn:
+        webs = db.list_webs(conn)
+        g = recommend.graph(conn, web_id, limit)
+    if g is None:
+        raise HTTPException(404, "no such web")
+    citations.schedule(state.pool, settings, [n["id"] for n in g["nodes"] if n["kind"] == "path"])
+    titles = {n["id"]: n["title"].split(":")[0] for n in g["nodes"] if n["kind"] == "path"}
+    return render(
+        request,
+        "explore.html",
+        webs=webs,
+        web=g["web"],
+        graph=g,
+        titles=titles,
+        limit=limit,
+        dwell=trail.DWELL_SECONDS,
+    )

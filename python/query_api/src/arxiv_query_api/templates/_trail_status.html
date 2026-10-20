@@ -3,7 +3,7 @@
 <div class="trail-status" id="trail-status" data-state="{{ 'on' if on_trail else 'off' }}">
   {% if on_trail %}
   <span class="trail-dot" aria-hidden="true"></span>
-  <span>On your path in <a href="/trail#web-{{ on_trail.web_id }}">{{ on_trail.web_name }}</a></span>
+  <span>On your path in <a href="/explore/{{ on_trail.web_id }}#paper={{ paper.arxiv_id }}">{{ on_trail.web_name }}</a></span>
   <form method="post" action="/trail/{{ paper.arxiv_id }}/remove" class="inline">
     <input type="hidden" name="next" value="/paper/{{ paper.arxiv_id }}">
     <button type="submit" class="link-btn">Remove</button>
@@ -45,7 +45,7 @@
         const dot = document.createElement("span");
         dot.className = "trail-dot";
         const link = document.createElement("a");
-        link.href = "/trail#web-" + res.web_id;
+        link.href = "/explore/" + res.web_id + "#paper=" + encodeURIComponent(payload.arxiv_id);
         link.textContent = res.web_name;
         box.dataset.state = "on";
         box.replaceChildren(dot, res.new_web ? "Started a new web: " : "Added to your path in ", link);

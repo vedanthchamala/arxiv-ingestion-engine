@@ -134,6 +134,7 @@ def test_graph_nodes_and_typed_edges(fake_db):
         patch.object(db, "trail_ids", return_value={"p1", "p2"}),
         patch.object(db, "dismissed_keys", return_value={"n2"}),
         patch.object(db, "papers_brief", return_value=brief),
+        patch.object(db, "citation_fetched", return_value={"p1"}),
         patch.object(
             db, "citations_for", side_effect=lambda c, ids: [e for e in extra if e["arxiv_id"] in ids]
         ),
@@ -153,6 +154,8 @@ def test_graph_nodes_and_typed_edges(fake_db):
     assert ("new1", "p1", "builds_on") in edges
     assert ("p2", "n1", "similar") in edges
     assert ("p2", "p1", "builds_on") in edges
+    assert g["pending_citations"] == 1
+    assert len(g["edges"]) == len(edges)
 
 
 def test_graph_of_unknown_web_is_none():

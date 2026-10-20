@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}{% if web %}{{ web.name }} · {% endif %}Explore · arXiv search{% endblock %}
+{% block head %}<script>document.documentElement.classList.add("js")</script>{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% set reason_text = {"builds_on": "cited by", "follow_up": "builds on", "similar": "similar to"} %}
+{% block content %}
+{% if not web %}
+<p class="eyebrow">Explore</p>
+<h1 class="page-title">Your research webs</h1>
+<p class="empty">
+  Nothing here yet. Open a paper and read it for {{ dwell }} seconds (or press “Add now”): it becomes the first
+  stop on your path, and its web of related papers appears here.
+</p>
+{% else %}
+<div class="head-row">
+  <div>
+    <p class="eyebrow">Explore</p>
+    <h1 class="page-title">{{ web.name }}</h1>
+  </div>
+  <a class="fine" href="/trail#web-{{ web.id }}">Rename, move or remove papers →</a>
+</div>
+{% if webs | length > 1 %}
+<nav class="seg-links web-tabs" aria-label="Your webs">
+  {% for w in webs %}<a href="/explore/{{ w.id }}"{% if w.id == web.id %} aria-current="true"{% endif %}>{{ w.name }} <span>{{ w.papers }}</span></a>{% endfor %}
+</nav>
+{% endif %}
+
+<div class="explore">
+  <div class="graph-wrap">
+    <div id="graph" class="graph" aria-label="Graph of your path and suggested papers" role="application"></div>
+    <div class="graph-legend" aria-hidden="true">
+      <span><i class="lg-path"></i>your path</span>
+      <span><i class="lg-cites"></i>builds on</span>
+      <span><i class="lg-similar"></i>similar to</span>
+      <span><i class="lg-node"></i>suggestion</span>
+      <span><i class="lg-external"></i>outside this index</span>
+    </div>
+    <div class="graph-tools">
+      <button type="button" class="tool" id="fit">Fit</button>
+      <a class="tool" href="/explore/{{ web.id }}?limit={{ [limit + 8, 40] | min }}" id="more">More suggestions</a>
+    </div>
+  </div>
+  <aside class="panel" id="panel" aria-live="polite">
+    <p class="panel-hint">
+      The orange line is your path in reading order. The papers around it are suggestions: what your papers
+      build on, newer work that builds on them, and the most similar papers in the index.
+      Pick one to see why it is here. Reading a suggestion for {{ dwell }} seconds adds it to your path, and new
+      suggestions branch from it.
+    </p>
+    {% if graph.pending_citations %}
+    <p class="fine">Citation links for {{ graph.pending_citations }} of your papers are still being fetched; reload in a minute for more “builds on” edges.</p>
+    {% endif %}
+  </aside>
+</div>
+
+<div class="graph-lists">
+  <section>
+    <h2 class="d-h">Your path</h2>
+    <ol class="path">
+      {% for n in graph.nodes if n.kind == "path" %}
+      <li class="path-step"><span class="path-dot" aria-hidden="true"></span>
+        <div class="path-body"><a class="path-title" href="/paper/{{ n.id }}">{{ n.title }}</a>
+          <span class="r-meta">{{ n.category }} · {{ n.year }}</span></div></li>
+      {% endfor %}
+    </ol>
+  </section>
+  <section>
+    <h2 class="d-h">Suggestions</h2>
+    <ul class="sugg-list">
+      {% for n in graph.nodes if n.kind == "suggestion" %}
+      {% set r = n.reasons[0] %}
+      <li>
+        {% if n.in_index %}
+        <a href="/paper/{{ n.id }}?via={{ r.from }}&kind={{ 'followed_by' if r.kind == 'follow_up' else r.kind }}&web={{ web.id }}">{{ n.title }}</a>
+        {% elif n.arxiv_id %}
+        <a href="https://arxiv.org/abs/{{ n.arxiv_id }}" rel="noopener">{{ n.title }}</a> <span class="ext">outside this index</span>
+        {% else %}
+        <a href="https://arxiv.org/search/?searchtype=title&query={{ n.title | urlencode }}" rel="noopener">{{ n.title }}</a> <span class="ext">outside this index</span>
+        {% endif %}
+        <span class="r-meta">{{ reason_text.get(r.kind, r.kind) }} {{ titles.get(r.from, r.from) }}{% if n.reasons | length > 1 %} and {{ n.reasons | length - 1 }} more{% endif %}{% if n.year %} · {{ n.year }}{% endif %}</span>
+      </li>
+      {% else %}
+      <li class="fine">No suggestions yet.</li>
+      {% endfor %}
+    </ul>
+  </section>
+</div>
+
+<script id="graph-data" type="application/json">{{ graph | tojson }}</script>
+<script src="{{ url_for('static', path='vendor/cytoscape-3.34.3.min.js') }}"></script>
+<script src="{{ url_for('static', path='vendor/layout-base-2.0.1.js') }}"></script>
+<script src="{{ url_for('static', path='vendor/cose-base-2.2.0.js') }}"></script>
+<script src="{{ url_for('static', path='vendor/cytoscape-fcose-2.2.0.js') }}"></script>
+<script src="{{ url_for('static', path='explore.js') }}"></script>
+{% endif %}
+{% endblock %}
