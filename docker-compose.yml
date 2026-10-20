@@ -216,6 +216,13 @@ services:
       HYBRID_SEARCH: ${HYBRID_SEARCH:-true}
       HNSW_EF_SEARCH: ${HNSW_EF_SEARCH:-200}
       WATCH_MIN_SCORE: ${WATCH_MIN_SCORE:-0.55}
+      # High-level design pages: the paper's figures come from its arXiv HTML (one request per paper,
+      # through the shared budget in Redis); Claude writes the designs when a key is set.
+      ARXIV_MIN_REQUEST_INTERVAL_SECS: ${ARXIV_MIN_REQUEST_INTERVAL_SECS:-3}
+      ARXIV_USER_AGENT: ${ARXIV_USER_AGENT:-arxiv-ingest/0.1}
+      DESIGN_PROVIDER: ${DESIGN_PROVIDER:-local}
+      DESIGN_CLAUDE_MODEL: ${DESIGN_CLAUDE_MODEL:-claude-opus-5-5}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     ports:
       - "${API_PORT:-8000}:8000"   # host port is overridable: API_PORT=8001 in .env
     depends_on:
