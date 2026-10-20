@@ -7,8 +7,10 @@ Candidates come from the web's most recent path papers (newest weighted highest)
   similar    - nearest papers by title + abstract embedding
 Papers on any path and dismissed suggestions are excluded; the list is capped per source paper so one
 paper's bibliography cannot fill it, and papers outside the index are capped so most suggestions can be
-opened (and so join the path) here. Every suggestion keeps the reasons it was picked."""
+opened (and so join the path) here; with fewer source papers than the list has room for, each may fill
+its share. Every suggestion keeps the reasons it was picked."""
 
+import math
 from collections import defaultdict
 from dataclasses import dataclass, field
 
@@ -74,14 +76,16 @@ def pick(found: dict[str, Candidate], exclude: set[str], limit: int = LIMIT) -> 
         (c for c in found.values() if c.key not in exclude and (c.arxiv_id or "") not in exclude),
         key=lambda c: (-c.score, c.key),
     )
+    source_of = {c.key: max(c.reasons, key=lambda r: r["weight"])["from"] for c in ranked}
+    cap = max(PER_SOURCE, math.ceil(limit / max(1, len(set(source_of.values())))))
     per_source: dict[str, int] = defaultdict(int)
     external_cap = max(1, round(limit * MAX_EXTERNAL_SHARE))
     chosen: list[Candidate] = []
     externals = 0
     for c in ranked:
-        source = max(c.reasons, key=lambda r: r["weight"])["from"]
+        source = source_of[c.key]
         external = c.arxiv_id is None
-        if per_source[source] >= PER_SOURCE or (external and externals >= external_cap):
+        if per_source[source] >= cap or (external and externals >= external_cap):
             continue
         chosen.append(c)
         per_source[source] += 1
@@ -110,7 +114,9 @@ def graph(conn: psycopg.Connection, web_id: int, limit: int = LIMIT) -> dict | N
             "title": p["title"],
             "category": p["primary_category"],
             "year": p["published_at"].year,
-            "summary": p["summary"] or p["abstract"],
+            "authors": p["authors"],
+            "summary": p["summary"],
+            "abstract": p["abstract"],
             "in_index": True,
         }
         for i, p in enumerate(path)
@@ -131,7 +137,9 @@ def graph(conn: psycopg.Connection, web_id: int, limit: int = LIMIT) -> dict | N
                 "title": info["title"] if info else (c.title or c.key),
                 "category": info["primary_category"] if info else None,
                 "year": info["published_at"].year if info else c.year,
-                "summary": (info["summary"] or info["abstract"]) if info else None,
+                "authors": info["authors"] if info else [],
+                "summary": info["summary"] if info else None,
+                "abstract": info["abstract"] if info else None,
                 "score": round(c.score, 3),
                 "reasons": sorted(c.reasons, key=lambda r: -r["weight"]),
             }

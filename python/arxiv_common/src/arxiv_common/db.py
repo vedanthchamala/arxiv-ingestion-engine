@@ -713,7 +713,7 @@ def trail_ids(conn: psycopg.Connection) -> set[str]:
 
 def papers_brief(conn: psycopg.Connection, arxiv_ids: list[str]) -> list[dict]:
     return conn.execute(
-        "SELECT arxiv_id, title, primary_category, published_at, summary, abstract FROM papers "
-        "WHERE arxiv_id = ANY(%s)",
+        f"SELECT p.arxiv_id, p.title, p.primary_category, p.published_at, p.summary, p.abstract, {_AUTHORS} "
+        "FROM papers p WHERE p.arxiv_id = ANY(%s)",
         (list(arxiv_ids),),
     ).fetchall()

@@ -97,6 +97,16 @@ def test_pick_excludes_trail_and_dismissed_and_caps_sources_and_externals():
     assert keys[0] == "arxiv:a1"
 
 
+def test_pick_lets_a_lone_source_fill_the_list():
+    found = {}
+    for i in range(20):
+        c = recommend.Candidate(f"arxiv:a{i}", f"a{i}")
+        c.add("similar", "p1", 1.0 - i / 100)
+        found[c.key] = c
+
+    assert len(recommend.pick(found, exclude=set(), limit=12)) == 12
+
+
 def test_graph_nodes_and_typed_edges(fake_db):
     path_rows = [
         {
@@ -106,6 +116,7 @@ def test_graph_nodes_and_typed_edges(fake_db):
             "published_at": NOW,
             "summary": "s1",
             "abstract": "a1",
+            "authors": ["Ada Lovelace"],
         },
         {
             "arxiv_id": "p2",
@@ -114,6 +125,7 @@ def test_graph_nodes_and_typed_edges(fake_db):
             "published_at": NOW,
             "summary": None,
             "abstract": "a2",
+            "authors": [],
         },
     ]
     brief = [
@@ -124,6 +136,7 @@ def test_graph_nodes_and_typed_edges(fake_db):
             "published_at": NOW,
             "summary": None,
             "abstract": "x",
+            "authors": ["Grace Hopper", "Alan Turing"],
         }
         for i in ("n1", "n2", "new1", "old1")
     ]
@@ -144,9 +157,12 @@ def test_graph_nodes_and_typed_edges(fake_db):
     nodes = {n["id"]: n for n in g["nodes"]}
     assert g["web"] == {"id": 3, "name": "SLAM"}
     assert [n["order"] for n in g["nodes"] if n["kind"] == "path"] == [1, 2]
-    assert nodes["p2"]["summary"] == "a2"
+    assert nodes["p1"]["summary"] == "s1" and nodes["p1"]["authors"] == ["Ada Lovelace"]
+    assert nodes["p2"]["summary"] is None and nodes["p2"]["abstract"] == "a2"
+    assert nodes["n1"]["authors"] == ["Grace Hopper", "Alan Turing"] and nodes["n1"]["abstract"] == "x"
     assert "n2" not in nodes and "p1" in nodes and nodes["p1"]["kind"] == "path"
     assert nodes["s2:x"]["in_index"] is False and nodes["s2:x"]["title"] == "Outside Paper"
+    assert nodes["s2:x"]["authors"] == [] and nodes["s2:x"]["abstract"] is None
     assert nodes["old1"]["in_index"] is True and nodes["old1"]["title"] == "T old1"
     edges = {(e["source"], e["target"], e["type"]) for e in g["edges"]}
     assert ("p1", "p2", "trail") in edges
