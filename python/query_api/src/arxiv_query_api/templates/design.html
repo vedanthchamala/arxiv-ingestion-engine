@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% block title %}High-level design · {{ paper.title }}{% endblock %}
+{% block head %}<script>document.documentElement.classList.add("js")</script>{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<article class="design">
+  <p class="crumbs"><a href="/paper/{{ paper.arxiv_id }}">← Back to the paper</a></p>
+  <div class="head-row">
+    <div>
+      <p class="eyebrow">High-level design</p>
+      <h1 class="page-title">{{ paper.title }}</h1>
+    </div>
+    {% include "_design_models.html" %}
+  </div>
+
+  <p class="lede">{{ d.one_liner }}</p>
+
+  <div class="pair">
+    <section class="pair-card">
+      <h2><span class="dot problem" aria-hidden="true"></span>The problem</h2>
+      <p>{{ d.problem }}</p>
+    </section>
+    <section class="pair-card">
+      <h2><span class="dot idea" aria-hidden="true"></span>The key idea</h2>
+      <p>{{ d.key_idea }}</p>
+    </section>
+  </div>
+
+  <section class="d-section">
+    <h2 class="d-h">How it works</h2>
+    <p class="fine">Follow the data through the steps. Pick one to see what it takes in, what it does and why it is there.</p>
+    <ol class="flow" role="tablist" aria-label="Steps">
+      {% for s in d.steps %}
+      <li class="flow-item">
+        <button type="button" class="flow-step" role="tab" id="tab-{{ loop.index }}" aria-controls="step-{{ loop.index }}"
+                aria-selected="{{ 'true' if loop.first else 'false' }}" data-step="{{ loop.index }}">
+          <span class="n">{{ loop.index }}</span>
+          <span class="flow-name">{{ s.name }}</span>
+          <span class="flow-does">{{ s.does }}</span>
+          <span class="flow-out"><span aria-hidden="true">→</span> {{ s.output }}</span>
+        </button>
+        {% if not loop.last %}<span class="flow-arrow" aria-hidden="true"></span>{% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+
+    {% for s in d.steps %}
+    <section class="step-detail{% if loop.first %} active{% endif %}" id="step-{{ loop.index }}" role="tabpanel" aria-labelledby="tab-{{ loop.index }}">
+      <header>
+        <span class="n">{{ loop.index }}</span>
+        <h3>{{ s.name }}</h3>
+        {% if s.section %}<span class="from">§ {{ s.section }}</span>{% endif %}
+      </header>
+      <div class="io">
+        <div class="io-box"><span class="io-label">Takes in</span><p>{{ s.input }}</p></div>
+        <span class="io-arrow" aria-hidden="true">→</span>
+        <div class="io-box main"><span class="io-label">Does</span><p>{{ s.does }}</p></div>
+        <span class="io-arrow" aria-hidden="true">→</span>
+        <div class="io-box"><span class="io-label">Produces</span><p>{{ s.output }}</p></div>
+      </div>
+      <p class="why"><span class="io-label">Why it is needed</span>{{ s.why }}</p>
+      {% if s.detail %}<p class="step-more">{{ s.detail }}</p>{% endif %}
+      {% if s.evidence %}<blockquote class="evidence">“{{ s.evidence }}”{% if s.section %}<cite>§ {{ s.section }}</cite>{% endif %}</blockquote>{% endif %}
+      <div class="step-nav">
+        {% if not loop.first %}<button type="button" class="link-btn" data-go="{{ loop.index - 1 }}">← Step {{ loop.index - 1 }}</button>{% else %}<span></span>{% endif %}
+        {% if not loop.last %}<button type="button" class="link-btn" data-go="{{ loop.index + 1 }}">Step {{ loop.index + 1 }} →</button>{% endif %}
+      </div>
+    </section>
+    {% endfor %}
+  </section>
+
+  {% if figure %}
+  <section class="d-section">
+    <h2 class="d-h">From the paper</h2>
+    <figure class="paper-fig">
+      <div class="fig-canvas">
+        {% for src in figure.images %}
+        <a href="{{ src }}" target="_blank" rel="noopener"><img src="{{ src }}" alt="Figure {{ figure.n }}: {{ figure.caption | truncate(160) }}" loading="lazy"></a>
+        {% endfor %}
+      </div>
+      <figcaption><b>Figure {{ figure.n }}.</b> {{ figure.caption | truncate(420) }}</figcaption>
+    </figure>
+    {% if more_figures %}
+    <details class="more-figs">
+      <summary>{{ more_figures | length }} more figure{{ "" if more_figures | length == 1 else "s" }} from the paper</summary>
+      <div class="fig-grid">
+        {% for f in more_figures %}
+        <a href="{{ f.images[0] }}" target="_blank" rel="noopener" title="Figure {{ f.n }}: {{ f.caption | truncate(240) }}">
+          <span class="thumb"><img src="{{ f.images[0] }}" alt="Figure {{ f.n }}" loading="lazy"></span>
+          <span class="thumb-cap"><b>Figure {{ f.n }}.</b> {{ f.caption | truncate(90) }}</span>
+        </a>
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {% if d.results %}
+  <section class="d-section">
+    <h2 class="d-h">Results at a glance</h2>
+    <div class="stats">
+      {% for r in d.results %}<div class="stat"><span class="stat-v">{{ r.value }}</span><span class="stat-l">{{ r.label }}</span></div>{% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {% if d.terms %}
+  <section class="d-section">
+    <h2 class="d-h">Key terms</h2>
+    <dl class="terms">
+      {% for t in d.terms %}<div><dt>{{ t.term }}</dt><dd>{{ t.meaning }}</dd></div>{% endfor %}
+    </dl>
+  </section>
+  {% endif %}
+
+  {% if d.limitations %}
+  <section class="d-section">
+    <h2 class="d-h">Limitations the authors state</h2>
+    <ul class="limits">{% for x in d.limitations %}<li>{{ x }}</li>{% endfor %}</ul>
+  </section>
+  {% endif %}
+
+  <footer class="provenance">
+    <p>
+      Written by <b>{{ row.model }}</b> from the paper's text{% if row.seconds %} in {{ row.seconds | round | int }} s{% endif %}{% if row.cost_usd %} for ${{ "%.3f" | format(row.cost_usd) }}{% endif %}.
+      {{ "Numbers, terms and quotes" if provider == "claude" else "Numbers and terms" }} were checked against that text{% if row.rejected %}, and {{ row.rejected | length }} that could not be found were left out{% endif %}.
+      It is a reading aid; check the paper for anything that matters.
+    </p>
+    {% if row.rejected %}
+    <details>
+      <summary>What was left out</summary>
+      <ul>{% for x in row.rejected %}<li><b>{{ x.kind }}</b> “{{ x.claim }}”: {{ x.reason }}</li>{% endfor %}</ul>
+    </details>
+    {% endif %}
+    <form method="post" action="/paper/{{ paper.arxiv_id }}/design/regenerate?model={{ provider }}">
+      <button type="submit" class="link-btn">Write it again</button>
+    </form>
+  </footer>
+</article>
+<script>
+(() => {
+  const tabs = [...document.querySelectorAll(".flow-step")];
+  const narrow = window.matchMedia("(max-width: 760px)");
+  const show = (i, reveal) => {
+    tabs.forEach((t) => t.setAttribute("aria-selected", String(+t.dataset.step === i)));
+    document.querySelectorAll(".step-detail").forEach((p) => p.classList.toggle("active", p.id === "step-" + i));
+    history.replaceState(null, "", "#step-" + i);
+    // Stacked on a phone, the detail sits below every step card: bring it into view.
+    if (reveal && narrow.matches) document.getElementById("step-" + i).scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+  const linked = /^#step-(\d+)$/.exec(location.hash);
+  if (linked && tabs[+linked[1] - 1]) show(+linked[1], false);
+  tabs.forEach((t) => {
+    t.addEventListener("click", () => show(+t.dataset.step, true));
+    t.addEventListener("keydown", (e) => {
+      const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+      const next = tabs[+t.dataset.step - 1 + d];
+      if (d && next) { e.preventDefault(); next.focus(); show(+next.dataset.step); }
+    });
+  });
+  document.querySelectorAll("[data-go]").forEach((b) => b.addEventListener("click", () => {
+    const i = +b.dataset.go; show(i, true); tabs[i - 1].focus({ preventScroll: true });
+  }));
+})();
+</script>
+{% endblock %}

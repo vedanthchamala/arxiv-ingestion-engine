@@ -1,0 +1,5 @@
+{% if providers | length > 1 %}
+<nav class="seg-links model-toggle" aria-label="Written by">
+  {% for p, label in providers %}<a href="?model={{ p }}"{% if p == provider %} aria-current="true"{% endif %}>{{ label }}{% if p in done_providers and p != provider %} ✓{% endif %}</a>{% endfor %}
+</nav>
+{% endif %}

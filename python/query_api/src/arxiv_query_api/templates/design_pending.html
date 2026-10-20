@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}High-level design · {{ paper.title }}{% endblock %}
+{% block head %}{% if not row or row.status == "running" %}<meta http-equiv="refresh" content="3">{% endif %}{% endblock %}
+{% block content %}
+<p class="crumbs"><a href="/paper/{{ paper.arxiv_id }}">← Back to the paper</a></p>
+<div class="head-row">
+  <div>
+    <p class="eyebrow">High-level design</p>
+    <h1 class="page-title">{{ paper.title }}</h1>
+  </div>
+  {% include "_design_models.html" %}
+</div>
+{% if row and row.status == "failed" %}
+<div class="error" role="alert">The design could not be written: {{ row.error }}</div>
+<form method="post" action="/paper/{{ paper.arxiv_id }}/design/regenerate?model={{ provider }}">
+  <button type="submit" class="btn solid">Try again</button>
+</form>
+{% else %}
+<div class="pending" role="status">
+  <div class="spinner" aria-hidden="true"></div>
+  <div>
+    <p class="pending-title">Reading the paper and sketching its design…</p>
+    <p class="fine">
+      {{ model }} is working from the stored full text{% if provider == "local" %}, which takes about a minute on a laptop{% endif %}.
+      The paper's own figures are fetched from arXiv the first time. This page refreshes on its own.
+    </p>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}arXiv search{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+  {% block head %}{% endblock %}
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='14' cy='14' r='8' fill='none' stroke='%231f5f8b' stroke-width='4'/><path d='M20 20l8 8' stroke='%231f5f8b' stroke-width='4' stroke-linecap='round'/></svg>">
 </head>
 <body>
@@ -18,7 +19,7 @@
       </nav>
     </div>
   </header>
-  <main class="wrap">
+  <main class="wrap {% block main_class %}{% endblock %}">
     {% if corpus.stale %}
     <div class="notice" role="status">
       The newest paper here is {{ corpus.age_days }} days old. If you expected newer ones, check the pipeline
@@ -27,7 +28,7 @@
     {% endif %}
     {% block content %}{% endblock %}
   </main>
-  <footer class="wrap foot">
+  <footer class="wrap foot {{ self.main_class() }}">
     {{ "{:,}".format(corpus.papers) }} papers · {{ "{:,}".format(corpus.full_text) }} with full text
     {% if corpus.newest %}· newest {{ corpus.newest | date }}{% endif %}
     · <a href="/stats">stats</a>
