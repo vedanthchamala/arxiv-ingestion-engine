@@ -41,6 +41,7 @@ was made. "Superseded" entries are kept so the reasoning trail stays intact.
 | [34](#34-watches-saved-searches-with-a-relevance-floor-and-atom-feeds) | Watches: saved searches with a relevance floor, "new since last visit", Atom feeds | accepted |
 | [35](#35-one-command-setup-containers-plus-the-hosts-ollama) | One-command setup: containers plus the host's Ollama | accepted (amends 29) |
 | [36](#36-gaps-are-reported-and-dead-letters-are-kept) | Poller reports page-cap gaps; the dead-letter topic is kept forever | accepted (amends 3, 11) |
+| [37](#37-high-level-design-pages-the-model-writes-data-the-page-draws-checks-remove-what-the-text-does-not-support) | High-level design pages: the model writes data, the page draws; checks remove what the text does not support | accepted (amends 2) |
 
 ---
 
@@ -411,4 +412,38 @@ rest on the topic they failed on (`chunked` payloads to `papers.chunked`, `paper
 the cycle it happens, and the fix is in the log line. The DLQ grows without bound, but it held 42
 records after a month of operation. The five lost papers are still searchable by abstract, and their
 ids are in `data/logs/worker.log` for a re-fetch.
+
+## 37. High-level design pages: the model writes data, the page draws; checks remove what the text does not support
+**Date** 2026-10-19 · **Context** Readers want to understand what a paper builds before reading it, and
+papers explain their systems with architecture figures that a text index never shows. A spike with the
+local Qwen2.5-7B on two papers produced well-ordered pipelines in about 60 s, but also an invented
+acronym expansion ("VGGT = View Geometry Guided Transformation"), a garbled one-liner and a dropped
+symbol. **Decision** `/paper/{id}/design` shows the one-sentence summary, the problem and key idea, the
+method as a 3-6 step flow (input, what happens, output, why), the paper's overview figure, results and
+key terms. The model returns JSON constrained by a schema and never draws: the page renders the flow
+from the steps, so the picture is always well formed. Two system prompts: a short literal one for the
+local model (fewer fields), and a richer one for Claude (per-step detail, a verbatim evidence quote,
+stated limitations), used when `ANTHROPIC_API_KEY` is set (`claude-opus-5-5`, effort medium, structured
+output, server-side fallback on refusal). Before anything is stored, result numbers must occur in the
+text the model saw, terms must occur in it, an acronym expansion must appear verbatim, evidence quotes
+must be substrings, and a one-liner that echoes the instruction is replaced by the paper's summary;
+removed claims are kept with the reason and listed on the page. Designs are written on first view in a
+background thread (one at a time for the local model, so it never competes with itself for Ollama),
+cached per paper and provider (`sql/004_designs.sql`) and regenerated when the paper version, model or
+prompt version changes. Figures come from the paper's arXiv HTML: fetched once per paper through the
+shared request budget (27), parsed from LaTeXML `<figure class="ltx_figure">` blocks, and the images are
+loaded by the reader's browser from arxiv.org; nothing is re-served. The overview figure is the model's
+pick if it names a real figure, else the first caption that says overview/architecture/pipeline/framework,
+else Figure 1. **Consequences** The query API becomes an arXiv-facing process for these single requests,
+which is why it goes through the shared limiter and the same user agent. The first view of a paper costs
+about 50 s with the local model (plus a few cents with Claude); later views are a database read.
+`scripts/eval_design.py` writes designs for a sample with either or both providers and prints a
+scorecard, so the two prompts can be compared on the same papers. Measured with the local model on 8
+sampled papers (BENCHMARKS.md): every result number the checks removed occurs nowhere in the paper (12
+of 22 with the first prompt), and an example value written into the second prompt ("130 KB/s") was
+copied into three unrelated papers and passed a bare-number check. Hence two rules learned the hard
+way: prompts carry no example values, and a value with a unit must appear in the text with that unit.
+With both, the same 8 papers keep 10 results and lose 2. The checks catch invented numbers, terms and
+expansions; they cannot catch a plausible but wrong description of a step, and Qwen's output varies
+noticeably between runs, which is why the page names the model and calls itself a reading aid.
 

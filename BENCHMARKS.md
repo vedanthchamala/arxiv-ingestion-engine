@@ -204,6 +204,27 @@ semantic cache now scopes entries by the query's identifier tokens (digits or in
 just outside the 0.12 hit threshold; plain-word paraphrases (`diffusion policy` / `diffusion policies for
 robots`, 0.068) still share an entry.
 
+## High-level design walkthroughs (2026-10-19)
+
+`scripts/eval_design.py --providers local --n 8` on the same 8 papers (seed 7, full-text HTML papers
+from cs.LG / cs.CV / cs.RO and cross-lists), qwen2.5:7b-instruct through Ollama on the M4 Pro, up to
+24,000 characters of each paper. "Removed" counts what the checks in decision 37 took out before
+storing. Every run wrote all 8 designs.
+
+| Run | Median time | Steps / paper | Results kept / removed | Terms kept / removed | Papers with figures |
+|---|---|---|---|---|---|
+| prompt v1, first parser | 24.3 s | 4.2 | 10 / 12 | 27 / 5 | 3 of 8 |
+| prompt v1, "Fig." captions + narrower acronym check | 13.2 s | 4.2 | 10 / 10 | 29 / 3 | 8 of 8 |
+| prompt v2 (number-and-unit example in the prompt) | - | - | 3 of the kept values were the example "130 KB/s" | - | 8 of 8 |
+| prompt v3 (no example values, unit check) | 24.1 s | 3.9 | 10 / 2 | 23 / 5 | 8 of 8 |
+
+Of the numbers removed in the first two runs, none occurs anywhere in the paper's stored text (checked
+against the full text, not only the part the model was shown): they were invented. In v2 the example
+value leaked because each of the three papers contained the bare number 130 somewhere; the v3 unit
+check rejects all three and still keeps genuine values such as "25-75 MB" (the paper writes "between
+25 and 75 MB"). Times vary with whether Ollama has the model loaded. Claude has not been measured yet:
+run the same command with `--providers local,claude` once `ANTHROPIC_API_KEY` is set.
+
 ## How to reproduce
 
 ```
@@ -211,5 +232,6 @@ docker compose up -d && ollama serve                     # Postgres/pgvector, Re
 uv run --project python python -m uvicorn arxiv_query_api.main:app --port 8001   # query API on Ollama defaults, if none is running (do not source .env: it points at the Spark)
 uv run --project python python scripts/eval_search.py --n 500 --paraphrase-n 200 --seed 42 [--ef-search 200] [--mode hybrid --rewrite-n 150]   # -> data/eval_search.json
 uv run --project python python scripts/bench_api.py --base-url http://127.0.0.1:8001 --duration 20 --concurrency 8,32   # -> data/bench_api.json
+uv run --project python python scripts/eval_design.py --providers local[,claude] --n 8   # design walkthroughs; claude needs ANTHROPIC_API_KEY
 uv run --project python ruff check --config python/pyproject.toml scripts/
 ```

@@ -16,10 +16,20 @@ morning.
   Each result shows the passage that matched and a short summary.
 - **A latest-papers feed** filtered by category, with a page per paper: summary, abstract, indexed
   sections and similar papers.
+- **High-level design for any paper.** One click turns a paper into a visual walkthrough: what it
+  builds, the problem and key idea, the method as a clickable flow of steps, the paper's own
+  architecture figure, results and key terms. Numbers and terms are checked against the paper's text.
 - **Watches.** Save any search and see the papers that arrived since your last visit, or subscribe to
   its Atom feed in any feed reader.
 - **Everything local.** Embeddings and summaries come from Ollama on your machine (or vLLM on a GPU
   box), and no paper text leaves it.
+
+<details>
+<summary>The High-level design page of a paper</summary>
+
+![High-level design of a paper](docs/design.png)
+
+</details>
 
 ## Quickstart
 
@@ -91,9 +101,10 @@ together, under arXiv's limit of one request per three seconds.
 |---|---|
 | `/` | Latest papers; type in the box to search. Paste an arXiv id or URL to jump straight to that paper |
 | `/paper/{id}` | Summary, abstract, indexed sections, similar papers |
+| `/paper/{id}/design` | High-level design: the method as a flow of steps, the overview figure, results, terms |
 | `/author?name=…` | One author's papers in the index |
 | `/watches` | Saved searches with what's new since your last visit; each has an Atom feed |
-| `/docs` | The JSON API (`POST /search`, `/papers/{id}`, `/papers/{id}/similar`, `/stats`, `/metrics`) |
+| `/docs` | The JSON API (`POST /search`, `/papers/{id}`, `/papers/{id}/similar`, `/papers/{id}/design`, `/stats`) |
 
 ```bash
 curl -s localhost:8000/search -H 'content-type: application/json' \
@@ -112,6 +123,7 @@ likely to change:
 | `SUMMARY_ENABLED` | `true` | Turn LLM summaries off |
 | `HYBRID_SEARCH` | `true` | Keyword + vector ranking; `false` for vector only |
 | `WATCH_MIN_SCORE` | `0.55` | How similar a paper must be to count as a watch match |
+| `ANTHROPIC_API_KEY` | unset | Optional: Claude writes the design pages too (a few cents per paper, cached) |
 | `API_PORT` | `8000` | Port for the web UI and API |
 
 ## Operating it
